@@ -47,9 +47,7 @@ export default function App() {
   const [gastos, setGastos] = useState(() => {
     try { return JSON.parse(localStorage.getItem(STORAGE_GASTOS)) || []; } catch { return []; }
   });
-  const [catalogo, setCatalogo] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(STORAGE_CATALOGO)) || []; } catch { return []; }
-  });
+  const [catalogo, setCatalogo] = useState([]);
 
  useEffect(() => {
   fetch("https://neo3d-backend.onrender.com/gastos")
@@ -80,6 +78,10 @@ useEffect(() => {
   fetchVentas();
 }, []);
 
+useEffect(() => {
+  fetchCatalogo();
+}, []);
+
 const marcarPago = (id, estadoActual) => {
   fetch(`https://neo3d-backend.onrender.com/ventas/${id}`, {
     method: "PUT",
@@ -95,6 +97,12 @@ const marcarPago = (id, estadoActual) => {
 };
 
 
+const fetchCatalogo = () => {
+  fetch("https://neo3d-backend.onrender.com/catalogo")
+    .then(res => res.json())
+    .then(data => setCatalogo(data))
+    .catch(err => console.log(err));
+};
 
 const eliminarVenta = (id) => {
   fetch(`https://neo3d-backend.onrender.com/ventas/${id}`, {
@@ -109,17 +117,22 @@ const eliminarVenta = (id) => {
   const eliminarGasto = (id) => setGastos(p => p.filter(g => g.id !== id));
 
   // Guarda o actualiza una pieza en el catálogo
-  const guardarEnCatalogo = (pieza) => {
-    setCatalogo(prev => {
-      const existe = prev.findIndex(p => p.nombre.toLowerCase() === pieza.nombre.toLowerCase());
-      if (existe >= 0) {
-        const nuevo = [...prev];
-        nuevo[existe] = pieza;
-        return nuevo;
-      }
-      return [...prev, pieza];
-    });
-  };
+  
+const guardarEnCatalogo = (pieza) => {
+  fetch("https://neo3d-backend.onrender.com/catalogo", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(pieza),
+  })
+    .then(res => res.text())
+    .then(() => {
+      fetchCatalogo(); // 🔥 recarga desde backend
+    })
+    .catch(err => console.log(err));
+};
+
 
   const eliminarDeCatalogo = (nombre) =>
     setCatalogo(prev => prev.filter(p => p.nombre !== nombre));
@@ -522,12 +535,33 @@ function TabGastos({ gastos, setGastos, eliminarGasto }) {
   const ch = e => setForm(p => ({ ...p, [e.target.name]: e.target.value }));
 
   const guardar = () => {
-    if (!form.monto || !form.descripcion) return;
-    setGastos(p => [...p, { id: Date.now(), ...form, monto: Number(form.monto), fecha: new Date(form.fecha + "T12:00:00").toISOString() }]);
-    setForm(emptyG);
-    setOk(true);
-    setTimeout(() => setOk(false), 2000);
-  };
+  if (!form.monto || !form.descripcion) return;
+
+  fetch("https://neo3d-backend.onrender.com/gastos", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      descripcion: form.descripcion,
+      categoria: form.categoria,
+      monto: Number(form.monto),
+      fecha: form.fecha,
+    }),
+  })
+    .then(res => res.text())
+    .then(() => {
+      // 🔥 volver a traer datos del backend
+      fetch("https://neo3d-backend.onrender.com/gastos")
+        .then(res => res.json())
+        .then(data => setGastos(data));
+    })
+    .catch(err => console.log(err));
+
+  setForm(emptyG);
+  setOk(true);
+  setTimeout(() => setOk(false), 2000);
+};
 
   const cats = { filamento: "⬡ Filamento", herramienta: "⚙ Herramienta", servicio: "⚡ Servicio/Luz", otro: "• Otro" };
   const total = gastos.reduce((s, g) => s + g.monto, 0);
