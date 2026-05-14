@@ -51,9 +51,11 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem(STORAGE_CATALOGO)) || []; } catch { return []; }
   });
 
-  //useEffect(() => localStorage.setItem(STORAGE_VENTAS,   JSON.stringify(ventas)),   [ventas]);
-  useEffect(() => localStorage.setItem(STORAGE_GASTOS,   JSON.stringify(gastos)),   [gastos]);
-  useEffect(() => localStorage.setItem(STORAGE_CATALOGO, JSON.stringify(catalogo)), [catalogo]);
+ useEffect(() => {
+  fetch("https://neo3d-backend.onrender.com/gastos")
+    .then(res => res.json())
+    .then(data => setGastos(data));
+}, []);
 
   
   const fetchVentas = () => {
