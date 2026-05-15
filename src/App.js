@@ -112,9 +112,18 @@ const eliminarVenta = (id) => {
     .catch(err => console.log(err));
 };
 
-
-
-  const eliminarGasto = (id) => setGastos(p => p.filter(g => g.id !== id));
+const eliminarGasto = (id) => {
+  fetch(`https://neo3d-backend.onrender.com/gastos/${id}`, {
+    method: "DELETE",
+  })
+    .then(() => {
+      // 🔥 volver a cargar desde backend
+      fetch("https://neo3d-backend.onrender.com/gastos")
+        .then(res => res.json())
+        .then(data => setGastos(data));
+    })
+    .catch(err => console.log(err));
+};
 
   // Guarda o actualiza una pieza en el catálogo
   
