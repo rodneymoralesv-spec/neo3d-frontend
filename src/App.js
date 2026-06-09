@@ -652,6 +652,7 @@ function calcResumen(ventasArr, gastosArr) {
   const totalGastos    = gastosArr.reduce((s, g) => s + g.monto, 0);
   const totalPendiente = totalFact - totalCobrado;
   // Sueldos y caja chica solo sobre lo cobrado
+  const cuenta = totalCobrado - totalGastos;
   const ganCobrada     = ventasArr.filter(v => v.pagado).reduce((s, v) => {
     const cc = calcPieza(v); const cant = v.cantidad || 1;
     return s + Math.max(0, v.precioTotal - cc.base * cant);
@@ -665,7 +666,7 @@ function calcResumen(ventasArr, gastosArr) {
     totalFact, totalCobrado, totalPendiente,
     totalFil, totalHrs, totalMO, totalGan, totalGastos,
     rodneyGan, dorisGan, rodneyTotal, dorisTotal,
-    cajaChica,
+    cajaChica, cuenta,
     numVentas: ventasArr.length,
     numPendientes: ventasArr.filter(v => !v.pagado).length,
   };
@@ -677,7 +678,7 @@ function TabResumen({ ventas, gastos }) {
     ...gastos.map(g => g.fecha.slice(0, 7)),
   ])].sort().reverse();
 
-  const [filtro, setFiltro] = useState("global");
+  const [filtro, setFiltro] = useState(hoyYM());
 
   const ventasFiltradas = filtro === "global" ? ventas : ventas.filter(v => v.fecha.startsWith(filtro));
   const gastosFiltrados = filtro === "global" ? gastos : gastos.filter(g => g.fecha.startsWith(filtro));
@@ -711,7 +712,14 @@ function TabResumen({ ventas, gastos }) {
               <StatCard label="Total facturado" val={fmt(r.totalFact)} sub={`${r.numVentas} pieza${r.numVentas !== 1 ? "s" : ""} registradas`} color={C.accent} />
               <StatCard label="Gastado" val={fmt(r.totalGastos)} sub="insumos y gastos" color="#f87171" />
             </div>
-
+            <div style={S.row2}>
+  <StatCard
+    label="Cuenta"
+    val={fmt(r.cuenta)}
+    sub="Cobrado - Gastos"
+    color="#22c55e"
+  />
+</div>
             {/* Sueldos */}
             <div style={S.previewTitle}>Sueldos del período</div>
             <div style={S.row2}>
