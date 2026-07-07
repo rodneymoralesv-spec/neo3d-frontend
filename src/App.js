@@ -185,7 +185,16 @@ const guardarEnCatalogo = (pieza) => {
 
 // ─── TAB CALCULAR ─────────────────────────────────────────
 function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalogo, fetchVentas }) {
-  const empty = { nombre: "", cliente: "", gramos: "", horas: "", manoDeObra: "", cantidad: "1", precioManual: "" };
+  const empty = {
+  nombre: "",
+  cliente: "",
+  gramos: "",
+  horas: "",
+  manoDeObra: "",
+  cantidad: "1",
+  precioManual: "",
+  fecha: new Date().toISOString().split("T")[0]
+};
   const [form, setForm]         = useState(empty);
   const [ok,   setOk]           = useState(false);
   const [sugerencias, setSugs]  = useState([]);   // lista filtrada del catálogo
@@ -262,7 +271,7 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
     precioTotal,
     ajustado: Number(form.precioManual) > 0,
     pagado: false,
-    fecha: new Date().toISOString(),
+    fecha: new Date(form.fecha + "T12:00:00").toISOString(),
   }),
 })
   .then(res => {
@@ -275,7 +284,10 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
   })
   .catch(err => console.log("ERROR:", err));
 
-  setForm(empty);
+  setForm({
+  ...empty,
+  fecha: new Date().toISOString().split("T")[0]
+});
   setEsDelCatalogo(false);
   setOk(true);
   setTimeout(() => setOk(false), 2200);
@@ -344,6 +356,16 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
         <Field label="Cliente">
           <input style={S.input} name="cliente" value={form.cliente} onChange={ch} placeholder="Nombre del cliente" />
         </Field>
+
+        <Field label="Fecha del requerimiento">
+  <input
+    type="date"
+    name="fecha"
+    value={form.fecha}
+    onChange={ch}
+    style={S.input}
+  />
+</Field>
 
         {/* Gramos, horas, mano de obra */}
         <div style={S.row3}>
