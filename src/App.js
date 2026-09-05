@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 
-const CFG = {
+const DEFAULT_CFG = {
   precioPorGramo: 0.02,
   precioPorHora: 0.30,
   porcentajeGanancia: 0.30,
   porcentajeRodney: 0.55,
-  porcentajeDoris: 0.45,
 };
 
 const STORAGE_VENTAS    = "neo3d_ventas_v4";
@@ -34,11 +33,11 @@ const dedupeCatalogo = (arr) => {
   return [...map.values()];
 };
 
-const calcPieza = ({ gramos, horas, manoDeObra }) => {
-  const fil  = Number(gramos) * CFG.precioPorGramo;
-  const hrs  = Number(horas)  * CFG.precioPorHora;
+const calcPieza = ({ gramos, horas, manoDeObra }, cfg) => {
+  const fil  = Number(gramos) * cfg.precioPorGramo;
+  const hrs  = Number(horas)  * cfg.precioPorHora;
   const base = fil + hrs + Number(manoDeObra);
-  const gan  = base * CFG.porcentajeGanancia;
+  const gan  = base * cfg.porcentajeGanancia;
   return { fil, hrs, base, gan, sugerido: base + gan };
 };
 
@@ -47,6 +46,7 @@ const TABS = [
   { id: "piezas",   icon: "▦", label: "Piezas"   },
   { id: "gastos",   icon: "↓", label: "Gastos"   },
   { id: "resumen",  icon: "◉", label: "Resumen"  },
+  { id: "ajustes",  icon: "⚙", label: "Ajustes"  },
 ];
 
 // ─── APP ──────────────────────────────────────────────────
@@ -59,12 +59,39 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem(STORAGE_GASTOS)) || []; } catch { return []; }
   });
   const [catalogo, setCatalogo] = useState([]);
+  const [cfg, setCfg] = useState(DEFAULT_CFG);
 
  useEffect(() => {
   fetch("https://neo3d-backend.onrender.com/gastos")
     .then(res => res.json())
     .then(data => setGastos(data));
 }, []);
+
+useEffect(() => {
+  fetch("https://neo3d-backend.onrender.com/config")
+    .then(res => res.json())
+    .then(data => {
+      if (data && data.precioPorGramo != null) {
+        setCfg({
+          precioPorGramo: Number(data.precioPorGramo),
+          precioPorHora: Number(data.precioPorHora),
+          porcentajeGanancia: Number(data.porcentajeGanancia),
+          porcentajeRodney: Number(data.porcentajeRodney),
+        });
+      }
+    })
+    .catch(err => console.log(err));
+}, []);
+
+const guardarConfig = (nuevoCfg) => {
+  fetch("https://neo3d-backend.onrender.com/config", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(nuevoCfg),
+  })
+    .then(() => setCfg(nuevoCfg))
+    .catch(err => console.log(err));
+};
 
   
   const fetchVentas = () => {
@@ -116,6 +143,8 @@ const fetchCatalogo = () => {
 };
 
 const eliminarVenta = (id) => {
+  if (!window.confirm("¿Eliminar esta venta? No se puede deshacer.")) return;
+
   fetch(`https://neo3d-backend.onrender.com/ventas/${id}`, {
     method: "DELETE",
   })
@@ -124,6 +153,8 @@ const eliminarVenta = (id) => {
 };
 
 const eliminarGasto = (id) => {
+  if (!window.confirm("¿Eliminar este gasto? No se puede deshacer.")) return;
+
   fetch(`https://neo3d-backend.onrender.com/gastos/${id}`, {
     method: "DELETE",
   })
@@ -154,8 +185,15 @@ const guardarEnCatalogo = (pieza) => {
 };
 
 
-  const eliminarDeCatalogo = (nombre) =>
-    setCatalogo(prev => prev.filter(p => p.nombre !== nombre));
+  const eliminarDeCatalogo = (id) => {
+    if (!window.confirm("¿Eliminar esta pieza del catálogo?")) return;
+
+    fetch(`https://neo3d-backend.onrender.com/catalogo/${id}`, {
+      method: "DELETE",
+    })
+      .then(() => fetchCatalogo())
+      .catch(err => console.log(err));
+  };
 
   return (
     <div style={S.root}>
@@ -175,11 +213,13 @@ const guardarEnCatalogo = (pieza) => {
   guardarEnCatalogo={guardarEnCatalogo}
   eliminarDeCatalogo={eliminarDeCatalogo}
   fetchVentas={fetchVentas}
+  cfg={cfg}
 />
         )}
-        {tab === "piezas"  && <TabPiezas ventas={ventas} marcarPago={marcarPago} eliminarVenta={eliminarVenta} />}
+        {tab === "piezas"  && <TabPiezas ventas={ventas} marcarPago={marcarPago} eliminarVenta={eliminarVenta} cfg={cfg} />}
         {tab === "gastos"  && <TabGastos gastos={gastos} setGastos={setGastos} eliminarGasto={eliminarGasto} />}
-        {tab === "resumen" && <TabResumen ventas={ventas} gastos={gastos} />}
+        {tab === "resumen" && <TabResumen ventas={ventas} gastos={gastos} cfg={cfg} />}
+        {tab === "ajustes" && <TabAjustes cfg={cfg} guardarConfig={guardarConfig} />}
       </main>
 
       <nav style={S.bottomNav}>
@@ -195,7 +235,7 @@ const guardarEnCatalogo = (pieza) => {
 }
 
 // ─── TAB CALCULAR ─────────────────────────────────────────
-function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalogo, fetchVentas }) {
+function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalogo, fetchVentas, cfg }) {
   const empty = {
   nombre: "",
   cliente: "",
@@ -248,7 +288,7 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
   const ch = (e) => setForm(p => ({ ...p, [e.target.name]: e.target.value }));
 
   const valid = form.gramos && form.horas && form.manoDeObra;
-  const calc  = valid ? calcPieza(form) : null;
+  const calc  = valid ? calcPieza(form, cfg) : null;
   const cant  = Math.max(1, Number(form.cantidad) || 1);
   const precioUnit  = calc ? (Number(form.precioManual) > 0 ? Number(form.precioManual) : calc.sugerido) : 0;
   const precioTotal = precioUnit * cant;
@@ -380,10 +420,10 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
 
         {/* Gramos, horas, mano de obra */}
         <div style={S.row3}>
-          <Field label="Gramos" hint="$0.02/g">
+          <Field label="Gramos" hint={`$${cfg.precioPorGramo}/g`}>
             <input style={S.input} type="number" name="gramos" value={form.gramos} onChange={ch} placeholder="0" min="0" />
           </Field>
-          <Field label="Horas" hint="$0.30/h">
+          <Field label="Horas" hint={`$${cfg.precioPorHora}/h`}>
             <input style={S.input} type="number" name="horas" value={form.horas} onChange={ch} placeholder="0" min="0" step="0.5" />
           </Field>
           <Field label="Mano obra" hint="USD">
@@ -412,7 +452,7 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
             <Row label="Mano de obra"                   val={fmt(Number(form.manoDeObra))} />
             <div style={S.divider} />
             <Row label="Subtotal"        val={fmt(calc.base)} bold />
-            <Row label="Ganancia 30%"    val={`+${fmt(calc.gan)}`} teal />
+            <Row label={`Ganancia ${Math.round(cfg.porcentajeGanancia * 100)}%`} val={`+${fmt(calc.gan)}`} teal />
             <Row label="Precio sugerido" val={fmt(calc.sugerido)} bold />
 
             {Number(form.precioManual) > 0 && (
@@ -453,11 +493,11 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
                 <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
                   {p.gramos}g · {p.horas}h · MO {fmt(p.manoDeObra)}
                   <span style={{ marginLeft: 8, color: C.teal, fontWeight: 600 }}>
-                    → {fmt(calcPieza(p).sugerido)}
+                    → {fmt(calcPieza(p, cfg).sugerido)}
                   </span>
                 </div>
               </div>
-              <button style={S.btnX} onClick={() => eliminarDeCatalogo(p.nombre)} title="Eliminar del catálogo">✕</button>
+              <button style={S.btnX} onClick={() => eliminarDeCatalogo(p.id)} title="Eliminar del catálogo">✕</button>
             </div>
           ))}
         </div>
@@ -465,7 +505,7 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
 
       {/* Tarifas */}
       <div style={S.row3}>
-        {[["⬡","$0.02","por gramo"],["◷","$0.30","por hora"],["◈","30%","ganancia"]].map(([ic,v,l]) => (
+        {[["⬡",`$${cfg.precioPorGramo}`,"por gramo"],["◷",`$${cfg.precioPorHora}`,"por hora"],["◈",`${Math.round(cfg.porcentajeGanancia * 100)}%`,"ganancia"]].map(([ic,v,l]) => (
           <div key={l} style={S.chipCard}>
             <span style={{ fontSize: 18, color: C.accent }}>{ic}</span>
             <span style={{ fontWeight: 800, fontSize: 15 }}>{v}</span>
@@ -478,7 +518,7 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
 }
 
 // ─── TAB PIEZAS ───────────────────────────────────────────
-function TabPiezas({ ventas, marcarPago, eliminarVenta }) {
+function TabPiezas({ ventas, marcarPago, eliminarVenta, cfg }) {
   const [filtro, setFiltro] = useState("todas");
 
   const lista = ventas.filter(v => {
@@ -511,14 +551,14 @@ function TabPiezas({ ventas, marcarPago, eliminarVenta }) {
 
       {lista.length === 0
         ? <Empty icon="▦" text="Sin piezas en esta categoría" />
-        : lista.map(v => <VentaCard key={v.id} v={v} marcarPago={marcarPago} eliminarVenta={eliminarVenta} />)}
+        : lista.map(v => <VentaCard key={v.id} v={v} marcarPago={marcarPago} eliminarVenta={eliminarVenta} cfg={cfg} />)}
     </div>
   );
 }
 
-function VentaCard({ v, marcarPago, eliminarVenta }) {
+function VentaCard({ v, marcarPago, eliminarVenta, cfg }) {
   const [open, setOpen] = useState(false);
-  const calc = calcPieza(v);
+  const calc = calcPieza(v, cfg);
   const fecha = new Date(v.fecha).toLocaleDateString("es-EC", { day: "2-digit", month: "short", year: "numeric" });
 
   return (
@@ -663,12 +703,12 @@ function TabGastos({ gastos, setGastos, eliminarGasto }) {
 }
 
 // ─── TAB RESUMEN ──────────────────────────────────────────
-function calcResumen(ventasArr, gastosArr) {
+function calcResumen(ventasArr, gastosArr, cfg) {
   let totalFil = 0, totalHrs = 0, totalMO = 0, totalGan = 0;
   let totalFact = 0, totalCobrado = 0;
   let filCobrado = 0, hrsCobrado = 0, moCobrado = 0;
   ventasArr.forEach(v => {
-    const cc   = calcPieza(v);
+    const cc   = calcPieza(v, cfg);
     const cant = v.cantidad || 1;
     totalFil  += cc.fil  * cant;
     totalHrs  += cc.hrs  * cant;
@@ -687,11 +727,11 @@ function calcResumen(ventasArr, gastosArr) {
   // Sueldos y caja chica solo sobre lo cobrado
   const cuenta = totalCobrado - totalGastos;
   const ganCobrada     = ventasArr.filter(v => v.pagado).reduce((s, v) => {
-    const cc = calcPieza(v); const cant = v.cantidad || 1;
+    const cc = calcPieza(v, cfg); const cant = v.cantidad || 1;
     return s + Math.max(0, v.precioTotal - cc.base * cant);
   }, 0);
-  const rodneyGan  = ganCobrada * CFG.porcentajeRodney;
-  const dorisGan   = ganCobrada * CFG.porcentajeDoris;
+  const rodneyGan  = ganCobrada * cfg.porcentajeRodney;
+  const dorisGan   = ganCobrada * (1 - cfg.porcentajeRodney);
   const rodneyTotal= rodneyGan + moCobrado;
   const dorisTotal = dorisGan;
   const cajaChica  = (filCobrado + hrsCobrado) - totalGastos;
@@ -705,7 +745,7 @@ function calcResumen(ventasArr, gastosArr) {
   };
 }
 
-function TabResumen({ ventas, gastos }) {
+function TabResumen({ ventas, gastos, cfg }) {
   const mesesDisponibles = [...new Set([
     ...ventas.map(v => v.fecha.slice(0, 7)),
     ...gastos.map(g => g.fecha.slice(0, 7)),
@@ -715,7 +755,7 @@ function TabResumen({ ventas, gastos }) {
 
   const ventasFiltradas = filtro === "global" ? ventas : ventas.filter(v => v.fecha.startsWith(filtro));
   const gastosFiltrados = filtro === "global" ? gastos : gastos.filter(g => g.fecha.startsWith(filtro));
-  const r = calcResumen(ventasFiltradas, gastosFiltrados);
+  const r = calcResumen(ventasFiltradas, gastosFiltrados, cfg);
   const periodoLabel = filtro === "global" ? "Todos los meses" : mesLabel(filtro);
   const sinDatos = ventasFiltradas.length === 0 && gastosFiltrados.length === 0;
 
@@ -758,7 +798,7 @@ function TabResumen({ ventas, gastos }) {
             <div style={S.row2}>
               <div style={{ ...S.sueldoCard, borderColor: "rgba(255,107,53,0.4)", background: "rgba(255,107,53,0.07)" }}>
                 <div style={{ fontSize: 16, fontWeight: 800 }}>Rodney</div>
-                <div style={{ fontSize: 11, color: C.muted }}>55% gan. + mano de obra</div>
+                <div style={{ fontSize: 11, color: C.muted }}>{Math.round(cfg.porcentajeRodney * 100)}% gan. + mano de obra</div>
                 <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>{fmt(r.rodneyTotal)}</div>
                 <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
                   <div>Ganancia: {fmt(r.rodneyGan)}</div>
@@ -767,7 +807,7 @@ function TabResumen({ ventas, gastos }) {
               </div>
               <div style={{ ...S.sueldoCard, borderColor: "rgba(0,196,180,0.4)", background: "rgba(0,196,180,0.07)" }}>
                 <div style={{ fontSize: 16, fontWeight: 800 }}>Doris</div>
-                <div style={{ fontSize: 11, color: C.muted }}>45% ganancia</div>
+                <div style={{ fontSize: 11, color: C.muted }}>{Math.round((1 - cfg.porcentajeRodney) * 100)}% ganancia</div>
                 <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>{fmt(r.dorisTotal)}</div>
                 <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
                   <div>Ganancia: {fmt(r.dorisGan)}</div>
@@ -806,6 +846,67 @@ function TabResumen({ ventas, gastos }) {
       }
     </div>
   );
+}
+
+// ─── TAB AJUSTES ──────────────────────────────────────────
+function TabAjustes({ cfg, guardarConfig }) {
+  const [form, setForm] = useState(() => cfgToForm(cfg));
+  const [ok, setOk] = useState(false);
+
+  useEffect(() => { setForm(cfgToForm(cfg)); }, [cfg]);
+
+  const ch = (e) => setForm(p => ({ ...p, [e.target.name]: e.target.value }));
+
+  const dorisPct = Math.max(0, 100 - (Number(form.porcentajeRodney) || 0));
+
+  const guardar = () => {
+    guardarConfig({
+      precioPorGramo: Number(form.precioPorGramo) || 0,
+      precioPorHora: Number(form.precioPorHora) || 0,
+      porcentajeGanancia: (Number(form.porcentajeGanancia) || 0) / 100,
+      porcentajeRodney: (Number(form.porcentajeRodney) || 0) / 100,
+    });
+    setOk(true);
+    setTimeout(() => setOk(false), 2000);
+  };
+
+  return (
+    <div style={S.section}>
+      <SectionHeader title="Ajustes" sub="Tarifas y reparto de ganancia del negocio" />
+
+      <div style={S.card}>
+        <div style={S.row2}>
+          <Field label="Precio por gramo" hint="USD">
+            <input style={S.input} type="number" name="precioPorGramo" value={form.precioPorGramo} onChange={ch} min="0" step="0.01" />
+          </Field>
+          <Field label="Precio por hora" hint="USD">
+            <input style={S.input} type="number" name="precioPorHora" value={form.precioPorHora} onChange={ch} min="0" step="0.01" />
+          </Field>
+        </div>
+
+        <Field label="Ganancia sobre el costo" hint="%">
+          <input style={S.input} type="number" name="porcentajeGanancia" value={form.porcentajeGanancia} onChange={ch} min="0" step="1" />
+        </Field>
+
+        <Field label="Reparto de ganancia — Rodney" hint={`Doris recibe ${dorisPct}%`}>
+          <input style={S.input} type="number" name="porcentajeRodney" value={form.porcentajeRodney} onChange={ch} min="0" max="100" step="1" />
+        </Field>
+
+        <button style={S.btn} onClick={guardar}>
+          {ok ? "✓ Guardado" : "Guardar cambios"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function cfgToForm(cfg) {
+  return {
+    precioPorGramo: cfg.precioPorGramo,
+    precioPorHora: cfg.precioPorHora,
+    porcentajeGanancia: Math.round(cfg.porcentajeGanancia * 100),
+    porcentajeRodney: Math.round(cfg.porcentajeRodney * 100),
+  };
 }
 
 // ─── COMPONENTES BASE ─────────────────────────────────────
