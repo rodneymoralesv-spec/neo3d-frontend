@@ -23,6 +23,17 @@ const hoyYM = () => {
   return `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, "0")}`;
 };
 
+// Deja solo una pieza por nombre (por si el catálogo trae duplicados viejos)
+const dedupeCatalogo = (arr) => {
+  const map = new Map();
+  arr.forEach(p => {
+    const key = p.nombre.trim().toLowerCase();
+    const existente = map.get(key);
+    if (!existente || p.id > existente.id) map.set(key, p);
+  });
+  return [...map.values()];
+};
+
 const calcPieza = ({ gramos, horas, manoDeObra }) => {
   const fil  = Number(gramos) * CFG.precioPorGramo;
   const hrs  = Number(horas)  * CFG.precioPorHora;
@@ -100,7 +111,7 @@ const marcarPago = (id, estadoActual) => {
 const fetchCatalogo = () => {
   fetch("https://neo3d-backend.onrender.com/catalogo")
     .then(res => res.json())
-    .then(data => setCatalogo(data))
+    .then(data => setCatalogo(dedupeCatalogo(data)))
     .catch(err => console.log(err));
 };
 
@@ -700,7 +711,7 @@ function TabResumen({ ventas, gastos }) {
     ...gastos.map(g => g.fecha.slice(0, 7)),
   ])].sort().reverse();
 
-  const [filtro, setFiltro] = useState(hoyYM());
+  const [filtro, setFiltro] = useState(() => mesesDisponibles.includes(hoyYM()) ? hoyYM() : "global");
 
   const ventasFiltradas = filtro === "global" ? ventas : ventas.filter(v => v.fecha.startsWith(filtro));
   const gastosFiltrados = filtro === "global" ? gastos : gastos.filter(g => g.fecha.startsWith(filtro));
