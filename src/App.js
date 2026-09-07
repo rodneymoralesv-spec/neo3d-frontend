@@ -1,4 +1,8 @@
 import { useState, useEffect, useRef } from "react";
+import {
+  soportaDirecto, carpetaLista, conectarCarpeta, publicarEnWeb,
+  enviarAlServidor, descargarParaBat, optimizarFoto, slugWeb,
+} from "./webNeo3d";
 
 const DEFAULT_CFG = {
   precioPorGramo: 0.02,
@@ -480,6 +484,12 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
         <button style={{ ...S.btn, ...(!valid ? S.btnOff : {}) }} onClick={guardar} disabled={!valid}>
           {ok ? "✓ ¡Venta registrada!" : "Registrar venta"}
         </button>
+
+        {/* Pieza nueva (el nombre no esta en el catalogo): ofrecer publicarla */}
+        {valid && form.nombre.trim() && !piezaCatalogo && (
+          <PublicarEnWeb nombre={form.nombre.trim()} precioSugerido={precioUnit}
+            gramos={form.gramos} horas={form.horas} />
+        )}
       </div>
 
       {/* Catálogo guardado */}
@@ -513,6 +523,202 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ─── PUBLICAR EN LA PAGINA WEB ────────────────────────────
+// Sale solo cuando la pieza es NUEVA. Escribe directo en la carpeta
+// PAGINA WEB: no hay que volver a escribir gramos, horas ni precio.
+const CATS_WEB = [
+  ["personalizados", "Personalizados"],
+  ["gamer",          "Gamer y figuras"],
+  ["llaveros",       "Llaveros"],
+  ["hogar",          "Hogar y deco"],
+  ["piezas",         "Piezas y repuestos"],
+  ["empresas",       "Para empresas"],
+];
+
+const ESCALAS_WEB = [
+  ["llavero", "Muchas por placa (tipo llavero)"],
+  ["media",   "Unas 6 o 7 (tipo soporte de celular)"],
+  ["grande",  "Una sola (jarro, figura, soporte de control)"],
+  ["",        "Sin mayoreo, precio fijo"],
+];
+
+function PublicarEnWeb({ nombre, precioSugerido, gramos, horas }) {
+  const [abierto,  setAbierto]  = useState(false);
+  const [conectada, setConectada] = useState(false);
+  const [cat,   setCat]   = useState("personalizados");
+  const [esc,   setEsc]   = useState("grande");
+  const [desc,  setDesc]  = useState("");
+  const [tags,  setTags]  = useState("");
+  const [precio, setPrecio] = useState("");
+  const [foto,  setFoto]  = useState(null);
+  const [estado, setEstado] = useState("");   // "", "cargando", "guardando", "ok"
+  const [error,  setError]  = useState("");
+  const [hecho,  setHecho]  = useState(null);
+
+  useEffect(() => { carpetaLista().then(setConectada); }, [abierto]);
+
+  const conectar = async () => {
+    setError("");
+    try {
+      await conectarCarpeta();
+      setConectada(true);
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const tomarFoto = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setEstado("cargando"); setError("");
+    try { setFoto(await optimizarFoto(f)); }
+    catch (err) { setError(err.message); }
+    setEstado("");
+  };
+
+  const datosPieza = () => ({
+    nombre, cat, esc, desc: desc.trim(), tags: tags.trim(),
+    precio: Number(Number(Number(precio) > 0 ? Number(precio) : precioSugerido).toFixed(2)),
+    fotoDataUrl: foto, gramos, horas,
+  });
+
+  // Si la carpeta esta conectada (estas en la PC) escribe directo.
+  // Si no (estas en el celular) la deja en el servidor para recogerla despues.
+  const publicar = async () => {
+    setEstado("guardando"); setError("");
+    try {
+      if (conectada) {
+        const r = await publicarEnWeb(datosPieza());
+        setHecho({ ...r, via: "carpeta" });
+      } else {
+        await enviarAlServidor(datosPieza());
+        setHecho({ id: slugWeb(nombre), via: "servidor" });
+      }
+      setEstado("ok");
+    } catch (err) {
+      setError(err.message);
+      setEstado("");
+    }
+  };
+
+  const planB = () => {
+    descargarParaBat({ ...datosPieza(), foto });
+    setHecho({ id: slugWeb(nombre), via: "archivo" });
+    setEstado("ok");
+  };
+
+  const cerrar = () => {
+    setAbierto(false); setEstado(""); setHecho(null);
+    setFoto(null); setDesc(""); setTags(""); setPrecio(""); setError("");
+  };
+
+  if (!abierto) {
+    return (
+      <button style={S.btnWeb} onClick={() => setAbierto(true)}>
+        🌐 Esta pieza es nueva — publicarla en la página web
+      </button>
+    );
+  }
+
+  if (estado === "ok") {
+    return (
+      <div style={S.webOk}>
+        <div style={{ fontWeight: 800, marginBottom: 6 }}>
+          {hecho?.via === "servidor" ? "✓ Guardada" : "✓ Publicada"}
+        </div>
+        <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+          {hecho?.via === "archivo" &&
+            <>Se descargó el archivo. Ahora doble clic en <strong>SUBIR-A-LA-WEB.bat</strong> en la carpeta PAGINA WEB.</>}
+          {hecho?.via === "servidor" &&
+            <>Quedó guardada en el servidor con su foto. Cuando estés en la computadora,
+              doble clic en <strong>SUBIR-A-LA-WEB.bat</strong> y se publica sola.</>}
+          {hecho?.via === "carpeta" &&
+            <>Ya quedó en el catálogo{hecho?.foto ? " con su foto" : " (sin foto)"}. Para que se vea en internet,
+              corré <strong>armar_paquete.py</strong> y subí el zip a Netlify.</>}
+        </div>
+        <button style={{ ...S.btnX, marginTop: 10, color: C.teal }} onClick={cerrar}>Cerrar</button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={S.webBox}>
+      <div style={S.previewTitle}>Publicar "{nombre}"</div>
+
+      {!conectada && (
+        <div style={S.webAviso}>
+          <div style={{ fontSize: 12, lineHeight: 1.55, marginBottom: soportaDirecto() ? 8 : 0 }}>
+            {soportaDirecto()
+              ? <>Estás en la computadora. Conectá la carpeta <strong>PAGINA WEB</strong> una
+                 sola vez y desde ahí se publica al instante. Si no la conectás, la pieza se
+                 guarda en el servidor y la publicás después.</>
+              : <>Se va a guardar en el servidor con su foto. Cuando estés en la computadora,
+                 doble clic en <strong>SUBIR-A-LA-WEB.bat</strong> y se publica sola.</>}
+          </div>
+          {soportaDirecto() && (
+            <button style={S.btnWeb} onClick={conectar}>📁 Conectar carpeta PAGINA WEB</button>
+          )}
+        </div>
+      )}
+
+      <div style={S.row2}>
+        <Field label="Categoría">
+          <select style={S.input} value={cat} onChange={e => setCat(e.target.value)}>
+            {CATS_WEB.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </Field>
+        <Field label="Precio público" hint={fmt(precioSugerido)}>
+          <input style={S.input} type="number" value={precio} min="0" step="0.50"
+            onChange={e => setPrecio(e.target.value)} placeholder={precioSugerido.toFixed(2)} />
+        </Field>
+      </div>
+
+      <Field label="Cuántas entran en una placa" hint="define el mayoreo">
+        <select style={S.input} value={esc} onChange={e => setEsc(e.target.value)}>
+          {ESCALAS_WEB.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+      </Field>
+
+      <Field label="Descripción corta">
+        <input style={S.input} value={desc} onChange={e => setDesc(e.target.value)}
+          placeholder="Una o dos frases, como se lo contarías a un cliente" />
+      </Field>
+
+      <Field label="Palabras de búsqueda" hint="separadas por espacio">
+        <input style={S.input} value={tags} onChange={e => setTags(e.target.value)}
+          placeholder="ej: gato mascota regalo llavero" />
+      </Field>
+
+      <Field label="Foto de la pieza">
+        <input style={{ ...S.input, padding: 8 }} type="file" accept="image/*" onChange={tomarFoto} />
+      </Field>
+
+      {estado === "cargando" && <div style={{ fontSize: 12, color: C.muted }}>Procesando la foto…</div>}
+      {foto && <img src={foto} alt="" style={{ width: "100%", borderRadius: 10,
+        border: `1px solid ${C.border}`, maxHeight: 220, objectFit: "cover" }} />}
+
+      {error && <div style={S.webError}>{error}</div>}
+
+      <button
+        style={{ ...S.btn, ...(!foto || estado === "guardando" ? S.btnOff : {}) }}
+        onClick={publicar}
+        disabled={!foto || estado === "guardando"}>
+        {estado === "guardando" ? "Guardando…"
+          : !foto ? "Falta la foto"
+          : conectada ? "Publicar en la web"
+          : "Guardar para publicar desde la PC"}
+      </button>
+
+      {!conectada && foto && soportaDirecto() && (
+        <button style={S.btnWeb} onClick={planB}>
+          O descargar el archivo y usar SUBIR-A-LA-WEB.bat
+        </button>
+      )}
+      <button style={S.btnX} onClick={cerrar}>Cancelar</button>
     </div>
   );
 }
@@ -1000,6 +1206,11 @@ const S = {
   precioBigNum: { fontSize:22, fontWeight:900, color:"#fff" },
 
   btn:    { background:C.accent, border:"none", borderRadius:12, color:"#fff", fontSize:15, fontWeight:700, padding:"13px", cursor:"pointer" },
+  btnWeb:  { background:"rgba(0,196,180,0.12)", border:`1px solid rgba(0,196,180,0.35)`, borderRadius:12, color:C.teal, fontSize:13, fontWeight:700, padding:"12px", cursor:"pointer", width:"100%" },
+  webBox:  { background:"rgba(0,196,180,0.06)", border:`1px solid rgba(0,196,180,0.28)`, borderRadius:12, padding:14, display:"flex", flexDirection:"column", gap:11 },
+  webOk:   { background:"rgba(0,196,180,0.10)", border:`1px solid rgba(0,196,180,0.35)`, borderRadius:12, padding:14, color:C.text },
+  webAviso:{ background:"rgba(255,255,255,0.04)", border:`1px solid ${C.border}`, borderRadius:10, padding:12 },
+  webError:{ background:"rgba(248,113,113,0.10)", border:"1px solid rgba(248,113,113,0.35)", borderRadius:10, padding:"10px 12px", fontSize:12, color:"#f87171", lineHeight:1.5 },
   btnOff: { opacity:0.35, cursor:"not-allowed" },
   btnX:   { background:"none", border:"none", color:C.muted, cursor:"pointer", fontSize:14, padding:"0 4px" },
 
