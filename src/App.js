@@ -15,6 +15,39 @@ const STORAGE_VENTAS    = "neo3d_ventas_v4";
 const STORAGE_GASTOS    = "neo3d_gastos_v4";
 const STORAGE_CATALOGO  = "neo3d_catalogo_v4";
 
+// En produccion apunta a Render. Para probar contra otro servidor: REACT_APP_API_URL
+const API = process.env.REACT_APP_API_URL || "https://neo3d-backend.onrender.com";
+
+// ─── SEGUIMIENTO DE PEDIDOS ───────────────────────────────
+const ESTADOS = [
+  { id: "por_hacer", label: "Por hacer", color: "#fbbf24" },
+  { id: "listo",     label: "Listo",     color: "#60a5fa" },
+  { id: "entregado", label: "Entregado", color: "#00c4b4" },
+];
+const SIGUIENTE = { por_hacer: "listo", listo: "entregado" };
+const estadoInfo = (id) => ESTADOS.find(e => e.id === id) || ESTADOS[2];
+
+// Dias que faltan para la entrega (negativo = atrasada). null si no hay fecha.
+const diasParaEntrega = (fechaEntrega) => {
+  if (!fechaEntrega) return null;
+  const f = new Date(fechaEntrega);  f.setHours(0, 0, 0, 0);
+  const hoy = new Date();            hoy.setHours(0, 0, 0, 0);
+  return Math.round((f - hoy) / 86400000);
+};
+
+// ISO del servidor -> "2026-09-25" para el <input type="date">
+const aInputFecha = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+// "2026-09-25" -> ISO al mediodia (evita que la zona horaria corra el dia)
+const deInputFecha = (s) => (s ? new Date(s + "T12:00:00").toISOString() : null);
+
+// Que parte del precio ya se cobro (0 a 1): pagado = todo; si no, lo abonado
+const fraccionCobrada = (v) => (v.pagado ? 1 : Math.min(1, (v.abono || 0) / (v.precioTotal || 1)));
+
 const fmt = (n = 0) =>
   Number(n).toLocaleString("es-EC", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
 
@@ -66,13 +99,13 @@ export default function App() {
   const [cfg, setCfg] = useState(DEFAULT_CFG);
 
  useEffect(() => {
-  fetch("https://neo3d-backend.onrender.com/gastos")
+  fetch(API + "/gastos")
     .then(res => res.json())
     .then(data => setGastos(data));
 }, []);
 
 useEffect(() => {
-  fetch("https://neo3d-backend.onrender.com/config")
+  fetch(API + "/config")
     .then(res => res.json())
     .then(data => {
       if (data && data.precioPorGramo != null) {
@@ -88,7 +121,7 @@ useEffect(() => {
 }, []);
 
 const guardarConfig = (nuevoCfg) => {
-  fetch("https://neo3d-backend.onrender.com/config", {
+  fetch(API + "/config", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(nuevoCfg),
@@ -99,7 +132,7 @@ const guardarConfig = (nuevoCfg) => {
 
   
   const fetchVentas = () => {
-  fetch("https://neo3d-backend.onrender.com/ventas")
+  fetch(API + "/ventas")
     .then(res => res.json())
     .then(data => {
   const limpio = data.map(v => ({
@@ -110,6 +143,9 @@ const guardarConfig = (nuevoCfg) => {
     horas: Number(v.horas),
     manoDeObra: Number(v.manoDeObra),
     cantidad: Number(v.cantidad),
+    abono: Number(v.abono) || 0,
+    estado: v.estado || "entregado",
+    fechaEntrega: v.fechaEntrega || null,
   }));
   setVentas(limpio);
 })
@@ -124,23 +160,24 @@ useEffect(() => {
   fetchCatalogo();
 }, []);
 
-const marcarPago = (id, estadoActual) => {
-  fetch(`https://neo3d-backend.onrender.com/ventas/${id}`, {
+// Cambia lo que haga falta de una venta: { estado }, { fechaEntrega }, { abono } o { pagado }
+const actualizarVenta = (id, campos) => {
+  fetch(`${API}/ventas/${id}`, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      pagado: !estadoActual,
-    }),
+    body: JSON.stringify(campos),
   })
     .then(() => fetchVentas())
     .catch(err => console.log(err));
 };
 
+const marcarPago = (id, estadoActual) => actualizarVenta(id, { pagado: !estadoActual });
+
 
 const fetchCatalogo = () => {
-  fetch("https://neo3d-backend.onrender.com/catalogo")
+  fetch(API + "/catalogo")
     .then(res => res.json())
     .then(data => setCatalogo(dedupeCatalogo(data)))
     .catch(err => console.log(err));
@@ -149,7 +186,7 @@ const fetchCatalogo = () => {
 const eliminarVenta = (id) => {
   if (!window.confirm("¿Eliminar esta venta? No se puede deshacer.")) return;
 
-  fetch(`https://neo3d-backend.onrender.com/ventas/${id}`, {
+  fetch(`${API}/ventas/${id}`, {
     method: "DELETE",
   })
     .then(() => fetchVentas())
@@ -159,12 +196,12 @@ const eliminarVenta = (id) => {
 const eliminarGasto = (id) => {
   if (!window.confirm("¿Eliminar este gasto? No se puede deshacer.")) return;
 
-  fetch(`https://neo3d-backend.onrender.com/gastos/${id}`, {
+  fetch(`${API}/gastos/${id}`, {
     method: "DELETE",
   })
     .then(() => {
       // 🔥 volver a cargar desde backend
-      fetch("https://neo3d-backend.onrender.com/gastos")
+      fetch(API + "/gastos")
         .then(res => res.json())
         .then(data => setGastos(data));
     })
@@ -174,7 +211,7 @@ const eliminarGasto = (id) => {
   // Guarda o actualiza una pieza en el catálogo
   
 const guardarEnCatalogo = (pieza) => {
-  fetch("https://neo3d-backend.onrender.com/catalogo", {
+  fetch(API + "/catalogo", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -192,7 +229,7 @@ const guardarEnCatalogo = (pieza) => {
   const eliminarDeCatalogo = (id) => {
     if (!window.confirm("¿Eliminar esta pieza del catálogo?")) return;
 
-    fetch(`https://neo3d-backend.onrender.com/catalogo/${id}`, {
+    fetch(`${API}/catalogo/${id}`, {
       method: "DELETE",
     })
       .then(() => fetchCatalogo())
@@ -220,7 +257,7 @@ const guardarEnCatalogo = (pieza) => {
   cfg={cfg}
 />
         )}
-        {tab === "piezas"  && <TabPiezas ventas={ventas} marcarPago={marcarPago} eliminarVenta={eliminarVenta} cfg={cfg} />}
+        {tab === "piezas"  && <TabPiezas ventas={ventas} marcarPago={marcarPago} eliminarVenta={eliminarVenta} actualizarVenta={actualizarVenta} cfg={cfg} />}
         {tab === "gastos"  && <TabGastos gastos={gastos} setGastos={setGastos} eliminarGasto={eliminarGasto} />}
         {tab === "resumen" && <TabResumen ventas={ventas} gastos={gastos} cfg={cfg} />}
         {tab === "ajustes" && <TabAjustes cfg={cfg} guardarConfig={guardarConfig} />}
@@ -248,7 +285,10 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
   manoDeObra: "",
   cantidad: "1",
   precioManual: "",
-  fecha: new Date().toISOString().split("T")[0]
+  fecha: new Date().toISOString().split("T")[0],
+  fechaEntrega: "",
+  abono: "",
+  estado: "por_hacer"
 };
   const [form, setForm]         = useState(empty);
   const [ok,   setOk]           = useState(false);
@@ -296,6 +336,8 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
   const cant  = Math.max(1, Number(form.cantidad) || 1);
   const precioUnit  = calc ? (Number(form.precioManual) > 0 ? Number(form.precioManual) : calc.sugerido) : 0;
   const precioTotal = precioUnit * cant;
+  // El abono nunca puede pasar del precio; si lo cubre entero, queda como pagado
+  const abonoNum = Math.min(Math.max(Number(form.abono) || 0, 0), precioTotal);
 
   const guardar = () => {
   if (!valid) return;
@@ -309,7 +351,7 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
     manoDeObra: Number(form.manoDeObra),
   });
 
-  fetch("https://neo3d-backend.onrender.com/ventas", {
+  fetch(API + "/ventas", {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
@@ -325,7 +367,10 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
     precioUnit,
     precioTotal,
     ajustado: Number(form.precioManual) > 0,
-    pagado: false,
+    pagado: precioTotal > 0 && abonoNum >= precioTotal - 0.005,
+    abono: abonoNum,
+    estado: form.estado,
+    fechaEntrega: deInputFecha(form.fechaEntrega),
     fecha: new Date(form.fecha + "T12:00:00").toISOString(),
   }),
 })
@@ -412,15 +457,14 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
           <input style={S.input} name="cliente" value={form.cliente} onChange={ch} placeholder="Nombre del cliente" />
         </Field>
 
-        <Field label="Fecha del requerimiento">
-  <input
-    type="date"
-    name="fecha"
-    value={form.fecha}
-    onChange={ch}
-    style={S.input}
-  />
-</Field>
+        <div style={S.row2}>
+          <Field label="Fecha del pedido">
+            <input type="date" name="fecha" value={form.fecha} onChange={ch} style={{ ...S.input, ...S.inputFecha }} />
+          </Field>
+          <Field label="Entregar el" hint="opcional">
+            <input type="date" name="fechaEntrega" value={form.fechaEntrega} onChange={ch} style={{ ...S.input, ...S.inputFecha }} />
+          </Field>
+        </div>
 
         {/* Gramos, horas, mano de obra */}
         <div style={S.row3}>
@@ -444,6 +488,18 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
             <input style={{ ...S.input, ...(form.precioManual ? { borderColor: C.accent } : {}) }}
               type="number" name="precioManual" value={form.precioManual} onChange={ch}
               placeholder={calc ? fmt(calc.sugerido) : "0.00"} min="0" step="0.50" />
+          </Field>
+        </div>
+
+        {/* Abono recibido y estado del pedido */}
+        <div style={S.row2}>
+          <Field label="Abono recibido" hint={abonoNum > 0 && precioTotal > 0 ? `${Math.round(abonoNum / precioTotal * 100)}%` : "USD"}>
+            <input style={S.input} type="number" name="abono" value={form.abono} onChange={ch} placeholder="0.00" min="0" step="0.50" />
+          </Field>
+          <Field label="Estado">
+            <select style={{ ...S.input, ...S.inputFecha }} name="estado" value={form.estado} onChange={ch}>
+              {ESTADOS.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+            </select>
           </Field>
         </div>
 
@@ -724,48 +780,84 @@ function PublicarEnWeb({ nombre, precioSugerido, gramos, horas }) {
 }
 
 // ─── TAB PIEZAS ───────────────────────────────────────────
-function TabPiezas({ ventas, marcarPago, eliminarVenta, cfg }) {
-  const [filtro, setFiltro] = useState("todas");
+function TabPiezas({ ventas, marcarPago, eliminarVenta, actualizarVenta, cfg }) {
+  // Si hay pedidos por hacer se abre en ellos; si no, en todas
+  const [filtro, setFiltro] = useState(() => ventas.some(v => v.estado === "por_hacer") ? "por_hacer" : "todas");
 
-  const lista = ventas.filter(v => {
-  if (filtro === "pendientes") return !v.pagado;
-  if (filtro === "pagadas") return v.pagado;
-  return true;
-});
+  const cumple = {
+    todas:      () => true,
+    por_hacer:  v => v.estado === "por_hacer",
+    listas:     v => v.estado === "listo",
+    por_cobrar: v => !v.pagado,
+    entregadas: v => v.estado === "entregado",
+  };
 
-  const pendTotal = ventas.filter(v => !v.pagado).reduce((s, v) => s + v.precioTotal, 0);
+  let lista = ventas.filter(cumple[filtro]);
+  // En "por hacer" y "listas" van primero las que se entregan antes
+  if (filtro === "por_hacer" || filtro === "listas") {
+    const clave = v => (v.fechaEntrega ? new Date(v.fechaEntrega).getTime() : Infinity);
+    lista = [...lista].sort((a, b) => { const x = clave(a), y = clave(b); return x === y ? 0 : x < y ? -1 : 1; });
+  }
+
+  const porHacer  = ventas.filter(v => v.estado === "por_hacer").length;
+  const listas    = ventas.filter(v => v.estado === "listo").length;
+  const atrasadas = ventas.filter(v => v.estado !== "entregado" && diasParaEntrega(v.fechaEntrega) !== null && diasParaEntrega(v.fechaEntrega) < 0).length;
+  const porCobrar = ventas.filter(v => !v.pagado).reduce((s, v) => s + Math.max(0, v.precioTotal - v.abono), 0);
 
   return (
     <div style={S.section}>
       <SectionHeader title="Piezas" sub={`${ventas.length} registros en total`} />
 
-      {pendTotal > 0 && (
-        <div style={S.alertBox}>
-          <span style={{ fontSize: 18 }}>⏳</span>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 13 }}>Por cobrar</div>
-            <div style={{ fontSize: 12, opacity: 0.8 }}>{fmt(pendTotal)}</div>
-          </div>
+      <div style={S.row3}>
+        <div style={S.chipCard}>
+          <span style={{ fontWeight: 800, fontSize: 18, color: "#fbbf24" }}>{porHacer}</span>
+          <span style={{ fontSize: 10, color: C.muted }}>por hacer</span>
         </div>
-      )}
+        <div style={S.chipCard}>
+          <span style={{ fontWeight: 800, fontSize: 18, color: C.accent }}>{fmt(porCobrar)}</span>
+          <span style={{ fontSize: 10, color: C.muted }}>por cobrar</span>
+        </div>
+        <div style={S.chipCard}>
+          <span style={{ fontWeight: 800, fontSize: 18, color: atrasadas > 0 ? "#f87171" : C.teal }}>{atrasadas > 0 ? atrasadas : listas}</span>
+          <span style={{ fontSize: 10, color: C.muted }}>{atrasadas > 0 ? (atrasadas === 1 ? "atrasada" : "atrasadas") : "listas p/ entregar"}</span>
+        </div>
+      </div>
 
       <div style={S.filterRow}>
-        {[["todas","Todas"],["pendientes","Pendientes"],["pagadas","Pagadas"]].map(([v,l]) => (
+        {[["por_hacer","Por hacer"],["listas","Listas"],["por_cobrar","Por cobrar"],["entregadas","Entregadas"],["todas","Todas"]].map(([v,l]) => (
           <button key={v} style={{ ...S.filterBtn, ...(filtro === v ? S.filterActive : {}) }} onClick={() => setFiltro(v)}>{l}</button>
         ))}
       </div>
 
       {lista.length === 0
         ? <Empty icon="▦" text="Sin piezas en esta categoría" />
-        : lista.map(v => <VentaCard key={v.id} v={v} marcarPago={marcarPago} eliminarVenta={eliminarVenta} cfg={cfg} />)}
+        : lista.map(v => <VentaCard key={v.id} v={v} marcarPago={marcarPago} eliminarVenta={eliminarVenta} actualizarVenta={actualizarVenta} cfg={cfg} />)}
     </div>
   );
 }
 
-function VentaCard({ v, marcarPago, eliminarVenta, cfg }) {
+function VentaCard({ v, marcarPago, eliminarVenta, actualizarVenta, cfg }) {
   const [open, setOpen] = useState(false);
+  const abonoRef = useRef(null);
   const calc = calcPieza(v, cfg);
   const fecha = new Date(v.fecha).toLocaleDateString("es-EC", { day: "2-digit", month: "short", year: "numeric" });
+
+  const est       = estadoInfo(v.estado);
+  const siguiente = SIGUIENTE[v.estado];
+  const abonado   = v.pagado ? v.precioTotal : v.abono;
+  const saldo     = Math.max(0, v.precioTotal - abonado);
+  const conAbono  = !v.pagado && abonado > 0;
+
+  // Aviso de entrega: solo mientras el pedido no se haya entregado
+  const dias = v.estado === "entregado" ? null : diasParaEntrega(v.fechaEntrega);
+  const aviso = dias === null ? null
+    : dias < 0   ? { txt: `Atrasada ${-dias} d`, color: "#f87171" }
+    : dias === 0 ? { txt: "Entrega HOY",         color: "#fbbf24" }
+    : dias === 1 ? { txt: "Entrega mañana",      color: "#fbbf24" }
+    : { txt: `Entrega ${new Date(v.fechaEntrega).toLocaleDateString("es-EC", { day: "2-digit", month: "short" })}`, color: C.muted };
+
+  const pagoColor = v.pagado ? C.teal : conAbono ? "#fbbf24" : "#f87171";
+  const pagoTxt   = v.pagado ? "✓ Pagado" : conAbono ? `Abono ${Math.round(abonado / v.precioTotal * 100)}%` : "Pendiente";
 
   return (
     <div style={{ ...S.vCard, borderLeftColor: v.pagado ? C.teal : "#f87171" }}>
@@ -777,12 +869,21 @@ function VentaCard({ v, marcarPago, eliminarVenta, cfg }) {
             <span>{fecha}</span>
             {v.cantidad > 1 && <span> · {v.cantidad} uds</span>}
           </div>
+          <div style={S.vEstadoRow}>
+            <span style={{ ...S.badge, background: est.color + "22", color: est.color }}>{est.label}</span>
+            {aviso && <span style={{ fontSize: 11, fontWeight: 700, color: aviso.color }}>{aviso.txt}</span>}
+            {siguiente && (
+              <button style={S.miniBtn}
+                onClick={e => { e.stopPropagation(); actualizarVenta(v.id, { estado: siguiente }); }}>
+                → {estadoInfo(siguiente).label}
+              </button>
+            )}
+          </div>
         </div>
         <div style={{ textAlign: "right", flexShrink: 0 }}>
           <div style={S.vPrecio}>{fmt(v.precioTotal)}</div>
-          <span style={{ ...S.badge, background: v.pagado ? C.teal + "22" : "#f8717122", color: v.pagado ? C.teal : "#f87171" }}>
-            {v.pagado ? "✓ Pagado" : "Pendiente"}
-          </span>
+          <span style={{ ...S.badge, background: pagoColor + "22", color: pagoColor }}>{pagoTxt}</span>
+          {conAbono && <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>Debe {fmt(saldo)}</div>}
         </div>
       </div>
 
@@ -795,6 +896,50 @@ function VentaCard({ v, marcarPago, eliminarVenta, cfg }) {
           <Row label="Precio por unidad"            val={fmt(v.precioUnit)} />
           {v.ajustado    && <Row label="Precio ajustado" val="Sí" teal />}
           {v.cantidad > 1 && <Row label={`× ${v.cantidad} unidades`} val={fmt(v.precioTotal)} bold />}
+
+          <div style={S.vLabel}>Estado del pedido</div>
+          <div style={S.segRow}>
+            {ESTADOS.map(e => (
+              <button key={e.id}
+                style={{ ...S.segBtn, ...(v.estado === e.id ? { background: e.color + "26", color: e.color, borderColor: e.color } : {}) }}
+                onClick={() => v.estado !== e.id && actualizarVenta(v.id, { estado: e.id })}>
+                {e.label}
+              </button>
+            ))}
+          </div>
+
+          <div style={S.vLabel}>Entregar el</div>
+          <input key={"f" + (v.fechaEntrega || "")} style={S.input} type="date"
+            defaultValue={aInputFecha(v.fechaEntrega)}
+            onChange={e => {
+              const s = e.target.value;
+              if (s && s < "2000-01-01") return;   // mientras se escribe el año, no guardar
+              actualizarVenta(v.id, { fechaEntrega: deInputFecha(s) });
+            }} />
+
+          <div style={S.vLabel}>
+            Pagos · {fmt(abonado)} de {fmt(v.precioTotal)}{saldo > 0 ? ` · saldo ${fmt(saldo)}` : ""}
+          </div>
+          {!v.pagado && (
+            <>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input key={"a" + v.abono} ref={abonoRef} style={S.input} type="number" min="0" step="0.50"
+                  defaultValue={v.abono || ""} placeholder="Total abonado (USD)" />
+                <button style={S.miniBtn2}
+                  onClick={() => actualizarVenta(v.id, { abono: Math.min(Number(abonoRef.current.value) || 0, v.precioTotal) })}>
+                  Guardar
+                </button>
+              </div>
+              <div style={S.segRow}>
+                {[30, 50].map(p => (
+                  <button key={p} style={S.segBtn}
+                    onClick={() => actualizarVenta(v.id, { abono: Math.round(v.precioTotal * p) / 100 })}>
+                    Abono {p}%
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
 
           <div style={S.vActions}>
             <button style={{ ...S.actionBtn, flex: 2,
@@ -825,7 +970,7 @@ function TabGastos({ gastos, setGastos, eliminarGasto }) {
   const guardar = () => {
   if (!form.monto || !form.descripcion) return;
 
-  fetch("https://neo3d-backend.onrender.com/gastos", {
+  fetch(API + "/gastos", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -840,7 +985,7 @@ function TabGastos({ gastos, setGastos, eliminarGasto }) {
     .then(res => res.text())
     .then(() => {
       // 🔥 volver a traer datos del backend
-      fetch("https://neo3d-backend.onrender.com/gastos")
+      fetch(API + "/gastos")
         .then(res => res.json())
         .then(data => setGastos(data));
     })
@@ -921,20 +1066,22 @@ function calcResumen(ventasArr, gastosArr, cfg) {
     totalMO   += Number(v.manoDeObra) * cant;
     totalGan  += Math.max(0, v.precioTotal - cc.base * cant);
     totalFact += v.precioTotal;
-    if (v.pagado) {
-      totalCobrado += v.precioTotal;
-      filCobrado   += cc.fil  * cant;
-      hrsCobrado   += cc.hrs  * cant;
-      moCobrado    += Number(v.manoDeObra) * cant;
+    // Cuenta completo si esta pagado; si aun debe saldo, solo la parte abonada
+    const f = fraccionCobrada(v);
+    if (f > 0) {
+      totalCobrado += v.precioTotal * f;
+      filCobrado   += cc.fil  * cant * f;
+      hrsCobrado   += cc.hrs  * cant * f;
+      moCobrado    += Number(v.manoDeObra) * cant * f;
     }
   });
   const totalGastos    = gastosArr.reduce((s, g) => s + g.monto, 0);
   const totalPendiente = totalFact - totalCobrado;
   // Sueldos y caja chica solo sobre lo cobrado
   const cuenta = totalCobrado - totalGastos;
-  const ganCobrada     = ventasArr.filter(v => v.pagado).reduce((s, v) => {
+  const ganCobrada     = ventasArr.reduce((s, v) => {
     const cc = calcPieza(v, cfg); const cant = v.cantidad || 1;
-    return s + Math.max(0, v.precioTotal - cc.base * cant);
+    return s + Math.max(0, v.precioTotal - cc.base * cant) * fraccionCobrada(v);
   }, 0);
   const rodneyGan  = ganCobrada * cfg.porcentajeRodney;
   const dorisGan   = ganCobrada * (1 - cfg.porcentajeRodney);
@@ -985,7 +1132,7 @@ function TabResumen({ ventas, gastos, cfg }) {
             {/* Tarjetas principales */}
             <div style={S.row2}>
               <StatCard label="Cobrado" val={fmt(r.totalCobrado)} sub="pagos recibidos" color={C.teal} />
-              <StatCard label="Por cobrar" val={fmt(r.totalPendiente)} sub={`${r.numPendientes} entregada${r.numPendientes !== 1 ? "s" : ""} sin pago`} color="#fbbf24" />
+              <StatCard label="Por cobrar" val={fmt(r.totalPendiente)} sub={`${r.numPendientes} pedido${r.numPendientes !== 1 ? "s" : ""} con saldo`} color="#fbbf24" />
             </div>
             <div style={S.row2}>
               <StatCard label="Total facturado" val={fmt(r.totalFact)} sub={`${r.numVentas} pieza${r.numVentas !== 1 ? "s" : ""} registradas`} color={C.accent} />
@@ -1188,8 +1335,9 @@ const S = {
   hint:    { color:C.accent, fontWeight:600, textTransform:"none", letterSpacing:0 },
   input:   { background:C.surface, border:`1px solid ${C.border}`, borderRadius:10, padding:"10px 13px", color:C.text, fontSize:14, outline:"none", width:"100%", boxSizing:"border-box" },
   inputDestacado: { borderColor: C.accent, fontSize:16, fontWeight:700 },
-  row2:    { display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 },
-  row3:    { display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 },
+  row2:    { display:"grid", gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)", gap:10 },
+  row3:    { display:"grid", gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)", gap:10 },
+  inputFecha: { padding:"10px 5px 10px 8px", fontSize:12 },
   divider: { height:1, background:C.border, margin:"4px 0" },
 
   dropdown: { position:"absolute", top:"100%", left:0, right:0, background:C.card, border:`1px solid ${C.accent}`, borderRadius:10, zIndex:200, overflow:"hidden", boxShadow:"0 8px 24px rgba(0,0,0,0.4)", marginTop:2 },
@@ -1217,7 +1365,7 @@ const S = {
   catalogoCard: { background:C.card, borderRadius:14, border:`1px solid ${C.border}`, padding:"14px 14px", display:"flex", alignItems:"center", gap:10 },
   chipCard:     { background:C.card, borderRadius:14, border:`1px solid ${C.border}`, padding:"12px 8px", display:"flex", flexDirection:"column", alignItems:"center", gap:3 },
 
-  filterRow:   { display:"flex", gap:8 },
+  filterRow:   { display:"flex", gap:8, flexWrap:"wrap" },
   filterBtn:   { fontSize:12, fontWeight:600, padding:"7px 14px", borderRadius:20, border:`1px solid ${C.border}`, background:"none", color:C.muted, cursor:"pointer" },
   filterActive:{ background:C.accent, color:"#fff", borderColor:C.accent },
 
@@ -1232,6 +1380,12 @@ const S = {
   vDetail: { padding:"12px 14px 14px", display:"flex", flexDirection:"column", gap:5, borderTop:`1px solid ${C.border}` },
   vActions:{ display:"flex", gap:8, marginTop:8 },
   actionBtn:{ flex:1, padding:"9px", borderRadius:10, border:"none", fontWeight:700, fontSize:13, cursor:"pointer" },
+  vEstadoRow:{ display:"flex", alignItems:"center", gap:8, marginTop:7, flexWrap:"wrap" },
+  miniBtn:  { fontSize:11, fontWeight:700, padding:"4px 10px", borderRadius:14, border:`1px solid ${C.border}`, background:"rgba(255,255,255,0.05)", color:C.text, cursor:"pointer" },
+  miniBtn2: { fontSize:13, fontWeight:700, padding:"0 16px", borderRadius:10, border:"none", background:C.accent, color:"#fff", cursor:"pointer", flexShrink:0 },
+  vLabel:   { fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:0.8, marginTop:10 },
+  segRow:   { display:"flex", gap:6 },
+  segBtn:   { flex:1, fontSize:12, fontWeight:700, padding:"8px 4px", borderRadius:10, border:`1px solid ${C.border}`, background:"none", color:C.muted, cursor:"pointer" },
 
   gastoCard: { background:C.card, borderRadius:12, border:`1px solid ${C.border}`, padding:"12px 14px", display:"flex", alignItems:"center", gap:10 },
 
