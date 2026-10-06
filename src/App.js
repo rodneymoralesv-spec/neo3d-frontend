@@ -312,6 +312,7 @@ const guardarEnCatalogo = (pieza) => {
       <main style={S.main}>
         {tab === "calcular" && (
           <TabCalcular
+  ventas={ventas}
   setVentas={setVentas}
   catalogo={catalogo}
   guardarEnCatalogo={guardarEnCatalogo}
@@ -339,7 +340,7 @@ const guardarEnCatalogo = (pieza) => {
 }
 
 // ─── TAB CALCULAR ─────────────────────────────────────────
-function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalogo, fetchVentas, cfg }) {
+function TabCalcular({ ventas, setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalogo, fetchVentas, cfg }) {
   const empty = {
   nombre: "",
   cliente: "",
@@ -358,6 +359,8 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
   const [sugerencias, setSugs]  = useState([]);   // lista filtrada del catálogo
   const [mostrarSugs, setMostrarSugs] = useState(false);
   const [esDelCatalogo, setEsDelCatalogo] = useState(false); // si el form vino de catálogo
+  // Piezas ya agregadas al pedido del cliente; se registran todas juntas
+  const [pedido, setPedido] = useState([]);
   const inputRef = useRef(null);
 
   // Filtra sugerencias cuando cambia el nombre
@@ -399,30 +402,10 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
   const cant  = Math.max(1, Number(form.cantidad) || 1);
   const precioUnit  = calc ? (Number(form.precioManual) > 0 ? Number(form.precioManual) : calc.sugerido) : 0;
   const precioTotal = precioUnit * cant;
-  // El abono nunca puede pasar del precio; si lo cubre entero, queda como pagado
-  const abonoNum = Math.min(Math.max(Number(form.abono) || 0, 0), precioTotal);
 
-  const guardar = () => {
-  if (!valid) return;
-
-  const nombre = form.nombre || "Pieza sin nombre";
-
-  guardarEnCatalogo({
-    nombre,
-    gramos: Number(form.gramos),
-    horas: Number(form.horas),
-    manoDeObra: Number(form.manoDeObra),
-  });
-
-  apiFetch("/ventas", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    "Cache-Control": "no-cache"
-  },
-  body: JSON.stringify({
-    nombre,
-    cliente: form.cliente || "",
+  // La pieza que está en el formulario, lista para sumarse al pedido
+  const piezaActual = () => ({
+    nombre: form.nombre.trim() || "Pieza sin nombre",
     gramos: Number(form.gramos),
     horas: Number(form.horas),
     manoDeObra: Number(form.manoDeObra),
@@ -430,27 +413,75 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
     precioUnit,
     precioTotal,
     ajustado: Number(form.precioManual) > 0,
-    pagado: precioTotal > 0 && abonoNum >= precioTotal - 0.005,
-    abono: abonoNum,
-    estado: form.estado,
-    fechaEntrega: deInputFecha(form.fechaEntrega),
-    fecha: new Date(form.fecha + "T12:00:00").toISOString(),
-  }),
-})
-  .then(res => {
-    console.log("STATUS:", res.status);
-    return res.text();
-  })
-  .then(data => {
-    console.log("Guardado:", data);
-  fetchVentas();
-  })
-  .catch(err => console.log("ERROR:", err));
+  });
+  const totalPedido = pedido.reduce((s, x) => s + x.precioTotal, 0) + (valid ? precioTotal : 0);
+  const nPiezas = pedido.length + (valid ? 1 : 0);
+
+  // El abono es del pedido completo: nunca pasa del total
+  const abonoNum = Math.min(Math.max(Number(form.abono) || 0, 0), totalPedido);
+
+  // Cliente que ya compró antes: cuántos pedidos tiene y cuánto debe
+  const clientes = [...new Set(ventas.map(v => (v.cliente || "").trim()).filter(Boolean))];
+  const delCliente = form.cliente.trim()
+    ? ventas.filter(v => (v.cliente || "").trim().toLowerCase() === form.cliente.trim().toLowerCase())
+    : [];
+  const debeCliente = delCliente.filter(v => !v.pagado).reduce((s, v) => s + Math.max(0, v.precioTotal - v.abono), 0);
+  const diasCliente = new Set(delCliente.map(v => String(v.fecha).slice(0, 10))).size;
+
+  const limpiarPieza = () => {
+    setForm(p => ({ ...p, nombre: "", gramos: "", horas: "", manoDeObra: "", cantidad: "1", precioManual: "" }));
+    setEsDelCatalogo(false);
+  };
+
+  const agregarAlPedido = () => {
+    if (!valid) return;
+    const pieza = piezaActual();
+    guardarEnCatalogo({ nombre: pieza.nombre, gramos: pieza.gramos, horas: pieza.horas, manoDeObra: pieza.manoDeObra });
+    setPedido(p => [...p, pieza]);
+    limpiarPieza();
+  };
+
+  const guardar = () => {
+  const items = [...pedido];
+  if (valid) {
+    const pieza = piezaActual();
+    guardarEnCatalogo({ nombre: pieza.nombre, gramos: pieza.gramos, horas: pieza.horas, manoDeObra: pieza.manoDeObra });
+    items.push(pieza);
+  }
+  if (items.length === 0) return;
+
+  // Todas las piezas comparten cliente y fecha exacta: así Piezas las agrupa como un pedido.
+  // El abono se reparte en proporción al precio de cada pieza; la última se lleva el redondeo.
+  const fecha = new Date(form.fecha + "T12:00:00").toISOString();
+  const total = items.reduce((s, x) => s + x.precioTotal, 0);
+  let resto = abonoNum;
+  const envios = items.map((x, i) => {
+    const abono = i === items.length - 1 ? resto
+      : Math.min(resto, Math.round((total > 0 ? abonoNum * x.precioTotal / total : 0) * 100) / 100);
+    resto = Math.round((resto - abono) * 100) / 100;
+    return apiFetch("/ventas", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" },
+      body: JSON.stringify({
+        ...x,
+        cliente: form.cliente.trim(),
+        pagado: x.precioTotal > 0 && abono >= x.precioTotal - 0.005,
+        abono,
+        estado: form.estado,
+        fechaEntrega: deInputFecha(form.fechaEntrega),
+        fecha,
+      }),
+    });
+  });
+  Promise.all(envios)
+    .then(() => fetchVentas())
+    .catch(err => console.log("ERROR:", err));
 
   setForm({
   ...empty,
   fecha: new Date().toISOString().split("T")[0]
 });
+  setPedido([]);
   setEsDelCatalogo(false);
   setOk(true);
   setTimeout(() => setOk(false), 2200);
@@ -517,8 +548,18 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
 
         {/* Cliente */}
         <Field label="Cliente">
-          <input style={S.input} name="cliente" value={form.cliente} onChange={ch} placeholder="Nombre del cliente" />
+          <input style={S.input} name="cliente" value={form.cliente} onChange={ch} placeholder="Nombre del cliente"
+            list="clientes-anteriores" autoComplete="off" />
+          <datalist id="clientes-anteriores">
+            {clientes.map(c => <option key={c} value={c} />)}
+          </datalist>
         </Field>
+        {delCliente.length > 0 && (
+          <div style={S.autocompleteBadge}>
+            Cliente conocido: {diasCliente} {diasCliente === 1 ? "pedido" : "pedidos"} antes
+            {debeCliente > 0.004 && <span style={{ color: "#fbbf24" }}> · te debe {fmt(debeCliente)}</span>}
+          </div>
+        )}
 
         <div style={S.row2}>
           <Field label="Fecha del pedido">
@@ -556,7 +597,8 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
 
         {/* Abono recibido y estado del pedido */}
         <div style={S.row2}>
-          <Field label="Abono recibido" hint={abonoNum > 0 && precioTotal > 0 ? `${Math.round(abonoNum / precioTotal * 100)}%` : "USD"}>
+          <Field label={pedido.length > 0 ? "Abono del pedido" : "Abono recibido"}
+            hint={abonoNum > 0 && totalPedido > 0 ? `${Math.round(abonoNum / totalPedido * 100)}%` : "USD"}>
             <input style={S.input} type="number" name="abono" value={form.abono} onChange={ch} placeholder="0.00" min="0" step="0.50" />
           </Field>
           <Field label="Estado">
@@ -600,8 +642,35 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
           </div>
         )}
 
-        <button style={{ ...S.btn, ...(!valid ? S.btnOff : {}) }} onClick={guardar} disabled={!valid}>
-          {ok ? "✓ ¡Venta registrada!" : "Registrar venta"}
+        {pedido.length > 0 && (
+          <div style={S.preview}>
+            <div style={S.previewTitle}>Pedido de {form.cliente.trim() || "este cliente"}</div>
+            {pedido.map((x, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                <span style={{ flex: 1 }}>{x.cantidad > 1 ? `${x.cantidad} × ` : ""}{x.nombre}</span>
+                <span style={{ fontWeight: 700 }}>{fmt(x.precioTotal)}</span>
+                <button style={S.btnX} onClick={() => setPedido(p => p.filter((_, j) => j !== i))} title="Quitar del pedido">✕</button>
+              </div>
+            ))}
+            {valid && (
+              <div style={{ display: "flex", fontSize: 13, color: C.muted }}>
+                <span style={{ flex: 1 }}>+ {form.nombre.trim() || "Pieza sin nombre"} (en el formulario)</span>
+                <span>{fmt(precioTotal)}</span>
+              </div>
+            )}
+            <div style={S.divider} />
+            <Row label={`Total del pedido · ${nPiezas} ${nPiezas === 1 ? "pieza" : "piezas"}`} val={fmt(totalPedido)} bold />
+          </div>
+        )}
+
+        <button style={{ ...S.btn, background: "#2a2a3a", ...(!valid ? S.btnOff : {}) }} onClick={agregarAlPedido} disabled={!valid}>
+          + Agregar otra pieza a este pedido
+        </button>
+
+        <button style={{ ...S.btn, ...(nPiezas === 0 ? S.btnOff : {}) }} onClick={guardar} disabled={nPiezas === 0}>
+          {ok ? "✓ ¡Registrado!"
+            : nPiezas > 1 ? `Registrar pedido (${nPiezas} piezas · ${fmt(totalPedido)})`
+            : "Registrar venta"}
         </button>
 
         {/* Pieza nueva (el nombre no esta en el catalogo): ofrecer publicarla */}
@@ -894,7 +963,63 @@ function TabPiezas({ ventas, marcarPago, eliminarVenta, actualizarVenta, cfg }) 
 
       {lista.length === 0
         ? <Empty icon="▦" text="Sin piezas en esta categoría" />
-        : lista.map(v => <VentaCard key={v.id} v={v} marcarPago={marcarPago} eliminarVenta={eliminarVenta} actualizarVenta={actualizarVenta} cfg={cfg} />)}
+        : agruparPedidos(lista).map(g => g.length === 1
+          ? <VentaCard key={g[0].id} v={g[0]} marcarPago={marcarPago} eliminarVenta={eliminarVenta} actualizarVenta={actualizarVenta} cfg={cfg} />
+          : <PedidoGrupo key={"p" + g[0].id} piezas={g} marcarPago={marcarPago} eliminarVenta={eliminarVenta} actualizarVenta={actualizarVenta} cfg={cfg} />)}
+    </div>
+  );
+}
+
+// Mismo cliente y mismo día = un solo pedido. Respeta el orden de la lista.
+function agruparPedidos(lista) {
+  const grupos = new Map();
+  lista.forEach(v => {
+    const cliente = (v.cliente || "").trim().toLowerCase();
+    const clave = cliente ? cliente + "|" + String(v.fecha).slice(0, 10) : "suelta" + v.id;
+    if (!grupos.has(clave)) grupos.set(clave, []);
+    grupos.get(clave).push(v);
+  });
+  return [...grupos.values()];
+}
+
+function PedidoGrupo({ piezas, marcarPago, eliminarVenta, actualizarVenta, cfg }) {
+  const total = piezas.reduce((s, v) => s + v.precioTotal, 0);
+  const debe  = piezas.filter(v => !v.pagado).reduce((s, v) => s + Math.max(0, v.precioTotal - v.abono), 0);
+  const fecha = new Date(piezas[0].fecha).toLocaleDateString("es-EC", { day: "2-digit", month: "short" });
+  // Si todas van en el mismo estado, se pueden avanzar juntas
+  const mismoEstado = piezas.every(v => v.estado === piezas[0].estado);
+  const siguiente   = mismoEstado ? SIGUIENTE[piezas[0].estado] : null;
+
+  return (
+    <div style={S.pedidoGrupo}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 800, fontSize: 15 }}>🧾 Pedido de {piezas[0].cliente}</div>
+          <div style={{ fontSize: 12, color: C.muted }}>{piezas.length} piezas · {fecha}</div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontWeight: 900, fontSize: 18 }}>{fmt(total)}</div>
+          <div style={{ fontSize: 11, color: debe > 0.004 ? "#fbbf24" : C.teal }}>
+            {debe > 0.004 ? `Debe ${fmt(debe)}` : "✓ Pagado"}
+          </div>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        {siguiente && (
+          <button style={S.miniBtn} onClick={() => piezas.forEach(v => actualizarVenta(v.id, { estado: siguiente }))}>
+            → Todo {estadoInfo(siguiente).label.toLowerCase()}
+          </button>
+        )}
+        {debe > 0.004 && (
+          <button style={S.miniBtn} onClick={() => {
+            if (!window.confirm(`¿Marcar como pagado todo el pedido (${fmt(debe)} pendiente)?`)) return;
+            piezas.filter(v => !v.pagado).forEach(v => actualizarVenta(v.id, { pagado: true }));
+          }}>
+            ✓ Cobrar todo
+          </button>
+        )}
+      </div>
+      {piezas.map(v => <VentaCard key={v.id} v={v} marcarPago={marcarPago} eliminarVenta={eliminarVenta} actualizarVenta={actualizarVenta} cfg={cfg} />)}
     </div>
   );
 }
@@ -1482,5 +1607,6 @@ const S = {
 
   enCuentaCard: { background:`linear-gradient(135deg,#1e3a5f,#1a2f4a)`, borderRadius:16, border:"1px solid rgba(99,179,237,0.3)", padding:"18px 18px", display:"flex", justifyContent:"space-between", alignItems:"center", gap:12 },
   totalCard: { background:`linear-gradient(135deg,${C.accent},#ff9a5c)`, borderRadius:18, padding:"20px 18px", textAlign:"center" },
+  pedidoGrupo:{ display:"flex", flexDirection:"column", gap:10, padding:12, borderRadius:16, border:`1px dashed ${C.border}`, background:"rgba(255,255,255,0.02)" },
   sueldoCard:{ borderRadius:16, padding:16, display:"flex", flexDirection:"column", border:"1px solid transparent" },
 };
