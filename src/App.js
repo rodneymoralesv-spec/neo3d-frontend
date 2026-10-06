@@ -1144,19 +1144,23 @@ function calcResumen(ventasArr, gastosArr, cfg) {
   const totalPendiente = totalFact - totalCobrado;
   // Sueldo y caja chica solo sobre lo cobrado
   const cuenta = totalCobrado - totalGastos;
-  const ganCobrada     = ventasArr.reduce((s, v) => {
+  // Si una pieza se vendió por menos de su costo, esa diferencia (perdida) sale
+  // del sueldo: así sueldo + caja chica siempre suman exactamente lo cobrado.
+  let ganCobrada = 0, perdida = 0;
+  ventasArr.forEach(v => {
     const cc = calcPieza(v, cfg); const cant = v.cantidad || 1;
-    return s + Math.max(0, v.precioTotal - cc.base * cant) * fraccionCobrada(v);
-  }, 0);
+    const dif = (v.precioTotal - cc.base * cant) * fraccionCobrada(v);
+    if (dif >= 0) ganCobrada += dif; else perdida -= dif;
+  });
   // La reserva sale de la ganancia y va a la caja; la mano de obra es toda tuya
   const reserva    = ganCobrada * (cfg.reservaNegocio || 0);
-  const sueldo     = ganCobrada - reserva + moCobrado;
+  const sueldo     = ganCobrada - reserva + moCobrado - perdida;
   const costoCobrado = filCobrado + hrsCobrado;
   const cajaChica  = costoCobrado + reserva - totalGastos;
   return {
     totalFact, totalCobrado, totalPendiente,
     totalFil, totalHrs, totalMO, totalGan, totalGastos,
-    ganCobrada, moCobrado, sueldo, reserva, costoCobrado,
+    ganCobrada, moCobrado, sueldo, reserva, costoCobrado, perdida,
     cajaChica, cuenta,
     numVentas: ventasArr.length,
     numPendientes: ventasArr.filter(v => !v.pagado).length,
@@ -1238,6 +1242,7 @@ function TabResumen({ ventas, gastos, cfg }) {
                 <div style={{ fontSize: 16, fontWeight: 800 }}>Tu sueldo</div>
                 <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
                   Ganancia {fmt(r.ganCobrada - r.reserva)} + mano de obra {fmt(r.moCobrado)}
+                  {r.perdida > 0.004 && ` − ${fmt(r.perdida)} vendido bajo costo`}
                 </div>
               </div>
               <div style={{ fontSize: 24, fontWeight: 900 }}>{fmt(r.sueldo)}</div>
@@ -1262,7 +1267,10 @@ function TabResumen({ ventas, gastos, cfg }) {
               <Row label="  Cobrado"         val={fmt(r.totalCobrado)} teal />
               <Row label="  Por cobrar"      val={fmt(r.totalPendiente)} />
               <div style={S.divider} />
-              <Row label="Tu sueldo (de cobrado)" val={fmt(r.sueldo)} />
+              <Row label="Mano de obra" val={fmt(r.moCobrado)} />
+              <Row label="Ganancia (después de la reserva)" val={fmt(r.ganCobrada - r.reserva)} />
+              {r.perdida > 0.004 && <Row label="  − Piezas vendidas bajo costo" val={`−${fmt(r.perdida)}`} red />}
+              <Row label="Tu sueldo (de cobrado)" val={fmt(r.sueldo)} bold />
               <div style={S.divider} />
               <Row label="Material y máquina" val={fmt(r.costoCobrado)} />
               {r.reserva > 0 && <Row label={`Reserva (${Math.round(cfg.reservaNegocio * 100)}% de la ganancia)`} val={`+${fmt(r.reserva)}`} />}
