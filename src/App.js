@@ -9,7 +9,14 @@ const DEFAULT_CFG = {
   precioPorGramo: 0.02,
   precioPorHora: 0.30,
   porcentajeGanancia: 0.30,
+  // Parte de la ganancia que se queda en la caja chica para el negocio (0.2 = 20%)
+  reservaNegocio: 0,
 };
+
+// Desde este mes el negocio es solo de Rodney (antes era en sociedad). Resumen,
+// gastos y entregadas arrancan de cero aquí; lo anterior queda como historial.
+const INICIO_SOLO = "2026-10";
+const esEtapaActual = (fecha) => String(fecha).slice(0, 7) >= INICIO_SOLO;
 
 const STORAGE_VENTAS    = "neo3d_ventas_v4";
 const STORAGE_GASTOS    = "neo3d_gastos_v4";
@@ -123,11 +130,8 @@ function Login({ onEntrar }) {
     <div style={S.root}>
       <form onSubmit={entrar} style={{ ...S.card, margin: "18vh 14px 0" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={S.headerIcon}>⬡</span>
-          <div>
-            <div style={S.headerTitle}>Neo3D</div>
-            <div style={S.headerSub}>Ingresá tu clave para continuar</div>
-          </div>
+          <Logo />
+          <div style={{ ...S.headerSub, marginLeft: "auto" }}>Ingresá tu clave</div>
         </div>
         <input style={S.input} type="password" autoFocus autoComplete="current-password"
           value={clave} onChange={e => setClave(e.target.value)} placeholder="Clave" />
@@ -167,6 +171,10 @@ useEffect(() => {
           precioPorGramo: Number(data.precioPorGramo),
           precioPorHora: Number(data.precioPorHora),
           porcentajeGanancia: Number(data.porcentajeGanancia),
+          // En la base sigue la columna porcentajeRodney (la parte de la ganancia que
+          // va al sueldo); lo que falta para 1 es la reserva del negocio.
+          reservaNegocio: data.porcentajeRodney == null ? 0
+            : Math.min(1, Math.max(0, 1 - Number(data.porcentajeRodney))),
         });
       }
     })
@@ -177,8 +185,12 @@ const guardarConfig = (nuevoCfg) => {
   apiFetch("/config", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    // porcentajeRodney queda en 1: el negocio ya no se reparte con nadie
-    body: JSON.stringify({ ...nuevoCfg, porcentajeRodney: 1 }),
+    body: JSON.stringify({
+      precioPorGramo: nuevoCfg.precioPorGramo,
+      precioPorHora: nuevoCfg.precioPorHora,
+      porcentajeGanancia: nuevoCfg.porcentajeGanancia,
+      porcentajeRodney: 1 - (nuevoCfg.reservaNegocio || 0),
+    }),
   })
     .then(() => setCfg(nuevoCfg))
     .catch(err => console.log(err));
@@ -293,11 +305,7 @@ const guardarEnCatalogo = (pieza) => {
   return (
     <div style={S.root}>
       <div style={S.header}>
-        <span style={S.headerIcon}>⬡</span>
-        <div>
-          <div style={S.headerTitle}>Neo3D</div>
-          <div style={S.headerSub}>Impresión 3D</div>
-        </div>
+        <Logo />
         <button style={{ ...S.btnX, marginLeft: "auto", fontSize: 12 }} onClick={onSalir}>Salir</button>
       </div>
 
@@ -840,11 +848,11 @@ function TabPiezas({ ventas, marcarPago, eliminarVenta, actualizarVenta, cfg }) 
   const [filtro, setFiltro] = useState(() => ventas.some(v => v.estado === "por_hacer") ? "por_hacer" : "todas");
 
   const cumple = {
-    todas:      () => true,
+    todas:      v => esEtapaActual(v.fecha),
     por_hacer:  v => v.estado === "por_hacer",
     listas:     v => v.estado === "listo",
     por_cobrar: v => !v.pagado,
-    entregadas: v => v.estado === "entregado",
+    entregadas: v => v.estado === "entregado" && esEtapaActual(v.fecha),
   };
 
   let lista = ventas.filter(cumple[filtro]);
@@ -861,7 +869,7 @@ function TabPiezas({ ventas, marcarPago, eliminarVenta, actualizarVenta, cfg }) 
 
   return (
     <div style={S.section}>
-      <SectionHeader title="Piezas" sub={`${ventas.length} registros en total`} />
+      <SectionHeader title="Piezas" sub={`${ventas.filter(v => esEtapaActual(v.fecha)).length} desde ${mesLabel(INICIO_SOLO)}`} />
 
       <div style={S.row3}>
         <div style={S.chipCard}>
@@ -1003,7 +1011,7 @@ function VentaCard({ v, marcarPago, eliminarVenta, actualizarVenta, cfg }) {
               onClick={() => marcarPago(v.id, v.pagado)}>
               {v.pagado ? "Marcar como pendiente" : "✓ Marcar como pagado"}
             </button>
-            <button style={{ ...S.actionBtn, background: "rgba(255,107,53,0.12)", color: C.accent }}
+            <button style={{ ...S.actionBtn, background: "rgba(227,20,31,0.12)", color: C.accent }}
               onClick={() => eliminarVenta(v.id)}>
               Eliminar
             </button>
@@ -1052,7 +1060,9 @@ function TabGastos({ gastos, setGastos, eliminarGasto }) {
 };
 
   const cats = { filamento: "⬡ Filamento", herramienta: "⚙ Herramienta", servicio: "⚡ Servicio/Luz", otro: "• Otro" };
-  const total = gastos.reduce((s, g) => s + g.monto, 0);
+  // Los gastos de antes siguen guardados: se ven en Resumen → historial
+  const actuales = gastos.filter(g => esEtapaActual(g.fecha));
+  const total = actuales.reduce((s, g) => s + g.monto, 0);
 
   return (
     <div style={S.section}>
@@ -1083,13 +1093,13 @@ function TabGastos({ gastos, setGastos, eliminarGasto }) {
         </button>
       </div>
 
-      {gastos.length > 0 && (
+      {actuales.length > 0 && (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 2px" }}>
-            <span style={{ color: C.muted, fontSize: 13 }}>Total acumulado</span>
+            <span style={{ color: C.muted, fontSize: 13 }}>Desde {mesLabel(INICIO_SOLO)}</span>
             <span style={{ fontWeight: 800, fontSize: 18, color: "#f87171" }}>−{fmt(total)}</span>
           </div>
-          {[...gastos].reverse().map(g => (
+          {[...actuales].reverse().map(g => (
             <div key={g.id} style={S.gastoCard}>
               <span style={{ fontSize: 18, width: 24, textAlign: "center" }}>{cats[g.categoria]?.slice(0, 2) || "•"}</span>
               <div style={{ flex: 1 }}>
@@ -1103,7 +1113,7 @@ function TabGastos({ gastos, setGastos, eliminarGasto }) {
         </>
       )}
 
-      {gastos.length === 0 && <Empty icon="↓" text="Sin gastos registrados" />}
+      {actuales.length === 0 && <Empty icon="↓" text={`Sin gastos desde ${mesLabel(INICIO_SOLO)}`} />}
     </div>
   );
 }
@@ -1138,12 +1148,15 @@ function calcResumen(ventasArr, gastosArr, cfg) {
     const cc = calcPieza(v, cfg); const cant = v.cantidad || 1;
     return s + Math.max(0, v.precioTotal - cc.base * cant) * fraccionCobrada(v);
   }, 0);
-  const sueldo     = ganCobrada + moCobrado;
-  const cajaChica  = (filCobrado + hrsCobrado) - totalGastos;
+  // La reserva sale de la ganancia y va a la caja; la mano de obra es toda tuya
+  const reserva    = ganCobrada * (cfg.reservaNegocio || 0);
+  const sueldo     = ganCobrada - reserva + moCobrado;
+  const costoCobrado = filCobrado + hrsCobrado;
+  const cajaChica  = costoCobrado + reserva - totalGastos;
   return {
     totalFact, totalCobrado, totalPendiente,
     totalFil, totalHrs, totalMO, totalGan, totalGastos,
-    ganCobrada, moCobrado, sueldo,
+    ganCobrada, moCobrado, sueldo, reserva, costoCobrado,
     cajaChica, cuenta,
     numVentas: ventasArr.length,
     numPendientes: ventasArr.filter(v => !v.pagado).length,
@@ -1156,12 +1169,25 @@ function TabResumen({ ventas, gastos, cfg }) {
     ...gastos.map(g => g.fecha.slice(0, 7)),
   ])].sort().reverse();
 
-  const [filtro, setFiltro] = useState(() => mesesDisponibles.includes(hoyYM()) ? hoyYM() : "global");
+  const mesesActuales = mesesDisponibles.filter(m => m >= INICIO_SOLO);
+  const mesesAntes    = mesesDisponibles.filter(m => m < INICIO_SOLO);
 
-  const ventasFiltradas = filtro === "global" ? ventas : ventas.filter(v => v.fecha.startsWith(filtro));
-  const gastosFiltrados = filtro === "global" ? gastos : gastos.filter(g => g.fecha.startsWith(filtro));
+  // "actual" = desde que el negocio es solo tuyo; "antes" = etapa en sociedad; "global" = todo
+  const [filtro, setFiltro] = useState(() => mesesActuales.includes(hoyYM()) ? hoyYM() : "actual");
+
+  const enPeriodo = (fecha) =>
+    filtro === "global" ? true
+    : filtro === "actual" ? esEtapaActual(fecha)
+    : filtro === "antes"  ? !esEtapaActual(fecha)
+    : fecha.startsWith(filtro);
+  const ventasFiltradas = ventas.filter(v => enPeriodo(v.fecha));
+  const gastosFiltrados = gastos.filter(g => enPeriodo(g.fecha));
   const r = calcResumen(ventasFiltradas, gastosFiltrados, cfg);
-  const periodoLabel = filtro === "global" ? "Todos los meses" : mesLabel(filtro);
+  const periodoLabel = {
+    global: "todo el historial",
+    actual: `desde ${mesLabel(INICIO_SOLO)}`,
+    antes:  "la etapa en sociedad",
+  }[filtro] || mesLabel(filtro);
   const sinDatos = ventasFiltradas.length === 0 && gastosFiltrados.length === 0;
 
   return (
@@ -1172,8 +1198,15 @@ function TabResumen({ ventas, gastos, cfg }) {
       <div style={S.card}>
         <Field label="Período">
           <select style={S.input} value={filtro} onChange={e => setFiltro(e.target.value)}>
-            <option value="global">📊 Todos los meses (global)</option>
-            {mesesDisponibles.map(m => <option key={m} value={m}>{mesLabel(m)}</option>)}
+            <option value="actual">📊 Desde {mesLabel(INICIO_SOLO)} (todo tuyo)</option>
+            {mesesActuales.map(m => <option key={m} value={m}>{mesLabel(m)}</option>)}
+            {mesesAntes.length > 0 && (
+              <optgroup label="Historial (etapa en sociedad)">
+                <option value="antes">Todo antes de {mesLabel(INICIO_SOLO)}</option>
+                {mesesAntes.map(m => <option key={m} value={m}>{mesLabel(m)}</option>)}
+                <option value="global">Todo el historial junto</option>
+              </optgroup>
+            )}
           </select>
         </Field>
       </div>
@@ -1200,11 +1233,11 @@ function TabResumen({ ventas, gastos, cfg }) {
 </div>
             {/* Sueldo */}
             <div style={{ ...S.sueldoCard, flexDirection: "row", alignItems: "center", gap: 12,
-              borderColor: "rgba(255,107,53,0.4)", background: "rgba(255,107,53,0.07)" }}>
+              borderColor: "rgba(227,20,31,0.4)", background: "rgba(227,20,31,0.07)" }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 16, fontWeight: 800 }}>Tu sueldo</div>
                 <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
-                  Ganancia {fmt(r.ganCobrada)} + mano de obra {fmt(r.moCobrado)}
+                  Ganancia {fmt(r.ganCobrada - r.reserva)} + mano de obra {fmt(r.moCobrado)}
                 </div>
               </div>
               <div style={{ fontSize: 24, fontWeight: 900 }}>{fmt(r.sueldo)}</div>
@@ -1216,10 +1249,10 @@ function TabResumen({ ventas, gastos, cfg }) {
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 700, fontSize: 15 }}>Caja chica</div>
                 <div style={{ fontSize: 11, color: C.muted }}>
-                  Solo de lo cobrado{r.totalGastos > 0 ? ` − gastos ${fmt(r.totalGastos)}` : ""}
+                  Material, máquina{r.reserva > 0 ? " y reserva" : ""}{r.totalGastos > 0 ? ` − gastos ${fmt(r.totalGastos)}` : ""}
                 </div>
               </div>
-              <div style={{ fontSize: 22, fontWeight: 900, color: r.cajaChica >= 0 ? C.accent : "#f87171" }}>{fmt(r.cajaChica)}</div>
+              <div style={{ fontSize: 22, fontWeight: 900, color: r.cajaChica >= 0 ? C.teal : "#f87171" }}>{fmt(r.cajaChica)}</div>
             </div>
 
             {/* Desglose completo */}
@@ -1231,6 +1264,8 @@ function TabResumen({ ventas, gastos, cfg }) {
               <div style={S.divider} />
               <Row label="Tu sueldo (de cobrado)" val={fmt(r.sueldo)} />
               <div style={S.divider} />
+              <Row label="Material y máquina" val={fmt(r.costoCobrado)} />
+              {r.reserva > 0 && <Row label={`Reserva (${Math.round(cfg.reservaNegocio * 100)}% de la ganancia)`} val={`+${fmt(r.reserva)}`} />}
               <Row label="Caja chica bruta"  val={fmt(r.cajaChica + r.totalGastos)} />
               {r.totalGastos > 0 && <Row label="  − Gastos insumos" val={`−${fmt(r.totalGastos)}`} red />}
               <Row label="Caja chica neta"   val={fmt(r.cajaChica)} bold />
@@ -1255,6 +1290,7 @@ function TabAjustes({ cfg, guardarConfig }) {
       precioPorGramo: Number(form.precioPorGramo) || 0,
       precioPorHora: Number(form.precioPorHora) || 0,
       porcentajeGanancia: (Number(form.porcentajeGanancia) || 0) / 100,
+      reservaNegocio: Math.min(100, Math.max(0, Number(form.reservaNegocio) || 0)) / 100,
     });
     setOk(true);
     setTimeout(() => setOk(false), 2000);
@@ -1278,6 +1314,14 @@ function TabAjustes({ cfg, guardarConfig }) {
           <input style={S.input} type="number" name="porcentajeGanancia" value={form.porcentajeGanancia} onChange={ch} min="0" step="1" />
         </Field>
 
+        <Field label="Reserva para el negocio" hint="% de la ganancia">
+          <input style={S.input} type="number" name="reservaNegocio" value={form.reservaNegocio} onChange={ch} min="0" max="100" step="1" />
+        </Field>
+        <div style={{ fontSize: 11, color: C.muted, marginTop: -6 }}>
+          Esa parte de la ganancia va a la caja chica (máquina nueva, repuestos, imprevistos).
+          El resto de la ganancia y toda la mano de obra son tu sueldo.
+        </div>
+
         <button style={S.btn} onClick={guardar}>
           {ok ? "✓ Guardado" : "Guardar cambios"}
         </button>
@@ -1291,10 +1335,19 @@ function cfgToForm(cfg) {
     precioPorGramo: cfg.precioPorGramo,
     precioPorHora: cfg.precioPorHora,
     porcentajeGanancia: Math.round(cfg.porcentajeGanancia * 100),
+    reservaNegocio: Math.round((cfg.reservaNegocio || 0) * 100),
   };
 }
 
 // ─── COMPONENTES BASE ─────────────────────────────────────
+function Logo() {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <img src={process.env.PUBLIC_URL + "/cubo-3d.png"} alt="" style={{ height: 32 }} />
+      <img src={process.env.PUBLIC_URL + "/roer.png"} alt="ROER 3D" style={{ height: 20 }} />
+    </div>
+  );
+}
 function SectionHeader({ title, sub }) {
   return <div><h2 style={S.h2}>{title}</h2><p style={S.sub}>{sub}</p></div>;
 }
@@ -1339,7 +1392,7 @@ const C = {
   surface: "#13131a",
   card:    "#1a1a24",
   border:  "#252532",
-  accent:  "#ff6b35",
+  accent:  "#e3141f",   // rojo ROER 3D
   teal:    "#00c4b4",
   text:    "#eeeef5",
   muted:   "#7777aa",
@@ -1348,8 +1401,6 @@ const C = {
 const S = {
   root:    { minHeight:"100vh", background:C.bg, color:C.text, fontFamily:"'DM Sans','Segoe UI',sans-serif", maxWidth:480, margin:"0 auto", paddingBottom:72 },
   header:  { display:"flex", alignItems:"center", gap:10, padding:"14px 18px 10px", background:C.surface, borderBottom:`1px solid ${C.border}`, position:"sticky", top:0, zIndex:50 },
-  headerIcon:  { fontSize:26, color:C.accent },
-  headerTitle: { fontWeight:900, fontSize:18, letterSpacing:-0.5 },
   headerSub:   { fontSize:11, color:C.muted },
   main:    { padding:"18px 14px 8px" },
   bottomNav: { position:"fixed", bottom:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:480, background:C.surface, borderTop:`1px solid ${C.border}`, display:"flex", zIndex:100 },
@@ -1378,7 +1429,7 @@ const S = {
   autocompleteBadge: { fontSize:12, fontWeight:600, color:C.teal, background:"rgba(0,196,180,0.1)", border:"1px solid rgba(0,196,180,0.25)", borderRadius:8, padding:"8px 12px" },
   diffBadge:         { fontSize:12, fontWeight:600, color:"#fbbf24", background:"rgba(251,191,36,0.08)", border:"1px solid rgba(251,191,36,0.25)", borderRadius:8, padding:"8px 12px" },
 
-  preview:      { background:"rgba(255,107,53,0.07)", border:`1px solid rgba(255,107,53,0.2)`, borderRadius:12, padding:14, display:"flex", flexDirection:"column", gap:6 },
+  preview:      { background:"rgba(227,20,31,0.07)", border:`1px solid rgba(227,20,31,0.2)`, borderRadius:12, padding:14, display:"flex", flexDirection:"column", gap:6 },
   previewTitle: { fontSize:11, fontWeight:700, color:C.accent, textTransform:"uppercase", letterSpacing:1, marginBottom:4 },
   ajusteBadge:  { fontSize:12, background:"rgba(255,255,255,0.05)", borderRadius:8, padding:"6px 10px" },
   multiBadge:   { fontSize:13, color:C.muted, background:"rgba(255,255,255,0.04)", borderRadius:8, padding:"7px 10px" },
