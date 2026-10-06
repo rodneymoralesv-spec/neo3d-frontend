@@ -3,20 +3,17 @@ import {
   soportaDirecto, carpetaLista, conectarCarpeta, publicarEnWeb,
   enviarAlServidor, descargarParaBat, optimizarFoto, slugWeb,
 } from "./webNeo3d";
+import { API, apiFetch, leerClave, guardarClave, borrarClave } from "./servidor";
 
 const DEFAULT_CFG = {
   precioPorGramo: 0.02,
   precioPorHora: 0.30,
   porcentajeGanancia: 0.30,
-  porcentajeRodney: 0.55,
 };
 
 const STORAGE_VENTAS    = "neo3d_ventas_v4";
 const STORAGE_GASTOS    = "neo3d_gastos_v4";
 const STORAGE_CATALOGO  = "neo3d_catalogo_v4";
-
-// En produccion apunta a Render. Para probar contra otro servidor: REACT_APP_API_URL
-const API = process.env.REACT_APP_API_URL || "https://neo3d-backend.onrender.com";
 
 // ─── SEGUIMIENTO DE PEDIDOS ───────────────────────────────
 const ESTADOS = [
@@ -87,7 +84,63 @@ const TABS = [
 ];
 
 // ─── APP ──────────────────────────────────────────────────
+// Sin clave guardada en este dispositivo solo se ve la pantalla de ingreso.
 export default function App() {
+  const [clave, setClave] = useState(leerClave);
+
+  useEffect(() => {
+    const salir = () => setClave("");
+    window.addEventListener("neo3d-sin-clave", salir);
+    return () => window.removeEventListener("neo3d-sin-clave", salir);
+  }, []);
+
+  if (!clave) return <Login onEntrar={c => { guardarClave(c); setClave(c); }} />;
+  return <Panel onSalir={() => { borrarClave(); setClave(""); }} />;
+}
+
+function Login({ onEntrar }) {
+  const [clave, setClave] = useState("");
+  const [probando, setProbando] = useState(false);
+  const [error, setError] = useState("");
+
+  const entrar = async (e) => {
+    e.preventDefault();
+    if (!clave || probando) return;
+    setProbando(true); setError("");
+    try {
+      const r = await fetch(API + "/config", { headers: { "x-clave": clave } });
+      if (r.ok) return onEntrar(clave);
+      setError(r.status === 401 ? "Clave incorrecta."
+        : r.status === 503 ? "El servidor todavía no tiene clave configurada (APP_PASSWORD en Render)."
+        : "El servidor respondió con un error. Probá de nuevo.");
+    } catch {
+      setError("No pude conectarme. Si el servidor estaba dormido, esperá medio minuto y probá de nuevo.");
+    }
+    setProbando(false);
+  };
+
+  return (
+    <div style={S.root}>
+      <form onSubmit={entrar} style={{ ...S.card, margin: "18vh 14px 0" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={S.headerIcon}>⬡</span>
+          <div>
+            <div style={S.headerTitle}>Neo3D</div>
+            <div style={S.headerSub}>Ingresá tu clave para continuar</div>
+          </div>
+        </div>
+        <input style={S.input} type="password" autoFocus autoComplete="current-password"
+          value={clave} onChange={e => setClave(e.target.value)} placeholder="Clave" />
+        {error && <div style={S.webError}>{error}</div>}
+        <button style={{ ...S.btn, ...(!clave || probando ? S.btnOff : {}) }} disabled={!clave || probando}>
+          {probando ? "Entrando… (si el servidor dormía tarda unos segundos)" : "Entrar"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function Panel({ onSalir }) {
   const [tab, setTab] = useState("calcular");
 
   const [ventas, setVentas] = useState([]);
@@ -99,13 +152,14 @@ export default function App() {
   const [cfg, setCfg] = useState(DEFAULT_CFG);
 
  useEffect(() => {
-  fetch(API + "/gastos")
+  apiFetch("/gastos")
     .then(res => res.json())
-    .then(data => setGastos(data));
+    .then(data => setGastos(data))
+    .catch(err => console.log(err));
 }, []);
 
 useEffect(() => {
-  fetch(API + "/config")
+  apiFetch("/config")
     .then(res => res.json())
     .then(data => {
       if (data && data.precioPorGramo != null) {
@@ -113,7 +167,6 @@ useEffect(() => {
           precioPorGramo: Number(data.precioPorGramo),
           precioPorHora: Number(data.precioPorHora),
           porcentajeGanancia: Number(data.porcentajeGanancia),
-          porcentajeRodney: Number(data.porcentajeRodney),
         });
       }
     })
@@ -121,10 +174,11 @@ useEffect(() => {
 }, []);
 
 const guardarConfig = (nuevoCfg) => {
-  fetch(API + "/config", {
+  apiFetch("/config", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(nuevoCfg),
+    // porcentajeRodney queda en 1: el negocio ya no se reparte con nadie
+    body: JSON.stringify({ ...nuevoCfg, porcentajeRodney: 1 }),
   })
     .then(() => setCfg(nuevoCfg))
     .catch(err => console.log(err));
@@ -132,7 +186,7 @@ const guardarConfig = (nuevoCfg) => {
 
   
   const fetchVentas = () => {
-  fetch(API + "/ventas")
+  apiFetch("/ventas")
     .then(res => res.json())
     .then(data => {
   const limpio = data.map(v => ({
@@ -162,7 +216,7 @@ useEffect(() => {
 
 // Cambia lo que haga falta de una venta: { estado }, { fechaEntrega }, { abono } o { pagado }
 const actualizarVenta = (id, campos) => {
-  fetch(`${API}/ventas/${id}`, {
+  apiFetch(`/ventas/${id}`, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
@@ -177,7 +231,7 @@ const marcarPago = (id, estadoActual) => actualizarVenta(id, { pagado: !estadoAc
 
 
 const fetchCatalogo = () => {
-  fetch(API + "/catalogo")
+  apiFetch("/catalogo")
     .then(res => res.json())
     .then(data => setCatalogo(dedupeCatalogo(data)))
     .catch(err => console.log(err));
@@ -186,7 +240,7 @@ const fetchCatalogo = () => {
 const eliminarVenta = (id) => {
   if (!window.confirm("¿Eliminar esta venta? No se puede deshacer.")) return;
 
-  fetch(`${API}/ventas/${id}`, {
+  apiFetch(`/ventas/${id}`, {
     method: "DELETE",
   })
     .then(() => fetchVentas())
@@ -196,12 +250,12 @@ const eliminarVenta = (id) => {
 const eliminarGasto = (id) => {
   if (!window.confirm("¿Eliminar este gasto? No se puede deshacer.")) return;
 
-  fetch(`${API}/gastos/${id}`, {
+  apiFetch(`/gastos/${id}`, {
     method: "DELETE",
   })
     .then(() => {
       // 🔥 volver a cargar desde backend
-      fetch(API + "/gastos")
+      apiFetch("/gastos")
         .then(res => res.json())
         .then(data => setGastos(data));
     })
@@ -211,7 +265,7 @@ const eliminarGasto = (id) => {
   // Guarda o actualiza una pieza en el catálogo
   
 const guardarEnCatalogo = (pieza) => {
-  fetch(API + "/catalogo", {
+  apiFetch("/catalogo", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -229,7 +283,7 @@ const guardarEnCatalogo = (pieza) => {
   const eliminarDeCatalogo = (id) => {
     if (!window.confirm("¿Eliminar esta pieza del catálogo?")) return;
 
-    fetch(`${API}/catalogo/${id}`, {
+    apiFetch(`/catalogo/${id}`, {
       method: "DELETE",
     })
       .then(() => fetchCatalogo())
@@ -242,8 +296,9 @@ const guardarEnCatalogo = (pieza) => {
         <span style={S.headerIcon}>⬡</span>
         <div>
           <div style={S.headerTitle}>Neo3D</div>
-          <div style={S.headerSub}>Rodney &amp; Doris</div>
+          <div style={S.headerSub}>Impresión 3D</div>
         </div>
+        <button style={{ ...S.btnX, marginLeft: "auto", fontSize: 12 }} onClick={onSalir}>Salir</button>
       </div>
 
       <main style={S.main}>
@@ -351,7 +406,7 @@ function TabCalcular({ setVentas, catalogo, guardarEnCatalogo, eliminarDeCatalog
     manoDeObra: Number(form.manoDeObra),
   });
 
-  fetch(API + "/ventas", {
+  apiFetch("/ventas", {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
@@ -970,7 +1025,7 @@ function TabGastos({ gastos, setGastos, eliminarGasto }) {
   const guardar = () => {
   if (!form.monto || !form.descripcion) return;
 
-  fetch(API + "/gastos", {
+  apiFetch("/gastos", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -985,7 +1040,7 @@ function TabGastos({ gastos, setGastos, eliminarGasto }) {
     .then(res => res.text())
     .then(() => {
       // 🔥 volver a traer datos del backend
-      fetch(API + "/gastos")
+      apiFetch("/gastos")
         .then(res => res.json())
         .then(data => setGastos(data));
     })
@@ -1077,21 +1132,18 @@ function calcResumen(ventasArr, gastosArr, cfg) {
   });
   const totalGastos    = gastosArr.reduce((s, g) => s + g.monto, 0);
   const totalPendiente = totalFact - totalCobrado;
-  // Sueldos y caja chica solo sobre lo cobrado
+  // Sueldo y caja chica solo sobre lo cobrado
   const cuenta = totalCobrado - totalGastos;
   const ganCobrada     = ventasArr.reduce((s, v) => {
     const cc = calcPieza(v, cfg); const cant = v.cantidad || 1;
     return s + Math.max(0, v.precioTotal - cc.base * cant) * fraccionCobrada(v);
   }, 0);
-  const rodneyGan  = ganCobrada * cfg.porcentajeRodney;
-  const dorisGan   = ganCobrada * (1 - cfg.porcentajeRodney);
-  const rodneyTotal= rodneyGan + moCobrado;
-  const dorisTotal = dorisGan;
+  const sueldo     = ganCobrada + moCobrado;
   const cajaChica  = (filCobrado + hrsCobrado) - totalGastos;
   return {
     totalFact, totalCobrado, totalPendiente,
     totalFil, totalHrs, totalMO, totalGan, totalGastos,
-    rodneyGan, dorisGan, rodneyTotal, dorisTotal,
+    ganCobrada, moCobrado, sueldo,
     cajaChica, cuenta,
     numVentas: ventasArr.length,
     numPendientes: ventasArr.filter(v => !v.pagado).length,
@@ -1146,26 +1198,16 @@ function TabResumen({ ventas, gastos, cfg }) {
     color="#22c55e"
   />
 </div>
-            {/* Sueldos */}
-            <div style={S.previewTitle}>Sueldos del período</div>
-            <div style={S.row2}>
-              <div style={{ ...S.sueldoCard, borderColor: "rgba(255,107,53,0.4)", background: "rgba(255,107,53,0.07)" }}>
-                <div style={{ fontSize: 16, fontWeight: 800 }}>Rodney</div>
-                <div style={{ fontSize: 11, color: C.muted }}>{Math.round(cfg.porcentajeRodney * 100)}% gan. + mano de obra</div>
-                <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>{fmt(r.rodneyTotal)}</div>
+            {/* Sueldo */}
+            <div style={{ ...S.sueldoCard, flexDirection: "row", alignItems: "center", gap: 12,
+              borderColor: "rgba(255,107,53,0.4)", background: "rgba(255,107,53,0.07)" }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 16, fontWeight: 800 }}>Tu sueldo</div>
                 <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
-                  <div>Ganancia: {fmt(r.rodneyGan)}</div>
-                  <div>MO: {fmt(r.totalMO)}</div>
+                  Ganancia {fmt(r.ganCobrada)} + mano de obra {fmt(r.moCobrado)}
                 </div>
               </div>
-              <div style={{ ...S.sueldoCard, borderColor: "rgba(0,196,180,0.4)", background: "rgba(0,196,180,0.07)" }}>
-                <div style={{ fontSize: 16, fontWeight: 800 }}>Doris</div>
-                <div style={{ fontSize: 11, color: C.muted }}>{Math.round((1 - cfg.porcentajeRodney) * 100)}% ganancia</div>
-                <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>{fmt(r.dorisTotal)}</div>
-                <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
-                  <div>Ganancia: {fmt(r.dorisGan)}</div>
-                </div>
-              </div>
+              <div style={{ fontSize: 24, fontWeight: 900 }}>{fmt(r.sueldo)}</div>
             </div>
 
             {/* Caja chica */}
@@ -1187,9 +1229,7 @@ function TabResumen({ ventas, gastos, cfg }) {
               <Row label="  Cobrado"         val={fmt(r.totalCobrado)} teal />
               <Row label="  Por cobrar"      val={fmt(r.totalPendiente)} />
               <div style={S.divider} />
-              <Row label="Sueldos (de cobrado)" val="" />
-              <Row label="  Rodney"          val={fmt(r.rodneyTotal)} />
-              <Row label="  Doris"           val={fmt(r.dorisTotal)} />
+              <Row label="Tu sueldo (de cobrado)" val={fmt(r.sueldo)} />
               <div style={S.divider} />
               <Row label="Caja chica bruta"  val={fmt(r.cajaChica + r.totalGastos)} />
               {r.totalGastos > 0 && <Row label="  − Gastos insumos" val={`−${fmt(r.totalGastos)}`} red />}
@@ -1210,14 +1250,11 @@ function TabAjustes({ cfg, guardarConfig }) {
 
   const ch = (e) => setForm(p => ({ ...p, [e.target.name]: e.target.value }));
 
-  const dorisPct = Math.max(0, 100 - (Number(form.porcentajeRodney) || 0));
-
   const guardar = () => {
     guardarConfig({
       precioPorGramo: Number(form.precioPorGramo) || 0,
       precioPorHora: Number(form.precioPorHora) || 0,
       porcentajeGanancia: (Number(form.porcentajeGanancia) || 0) / 100,
-      porcentajeRodney: (Number(form.porcentajeRodney) || 0) / 100,
     });
     setOk(true);
     setTimeout(() => setOk(false), 2000);
@@ -1225,7 +1262,7 @@ function TabAjustes({ cfg, guardarConfig }) {
 
   return (
     <div style={S.section}>
-      <SectionHeader title="Ajustes" sub="Tarifas y reparto de ganancia del negocio" />
+      <SectionHeader title="Ajustes" sub="Tarifas del negocio" />
 
       <div style={S.card}>
         <div style={S.row2}>
@@ -1241,10 +1278,6 @@ function TabAjustes({ cfg, guardarConfig }) {
           <input style={S.input} type="number" name="porcentajeGanancia" value={form.porcentajeGanancia} onChange={ch} min="0" step="1" />
         </Field>
 
-        <Field label="Reparto de ganancia — Rodney" hint={`Doris recibe ${dorisPct}%`}>
-          <input style={S.input} type="number" name="porcentajeRodney" value={form.porcentajeRodney} onChange={ch} min="0" max="100" step="1" />
-        </Field>
-
         <button style={S.btn} onClick={guardar}>
           {ok ? "✓ Guardado" : "Guardar cambios"}
         </button>
@@ -1258,7 +1291,6 @@ function cfgToForm(cfg) {
     precioPorGramo: cfg.precioPorGramo,
     precioPorHora: cfg.precioPorHora,
     porcentajeGanancia: Math.round(cfg.porcentajeGanancia * 100),
-    porcentajeRodney: Math.round(cfg.porcentajeRodney * 100),
   };
 }
 

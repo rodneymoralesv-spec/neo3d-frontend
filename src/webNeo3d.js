@@ -10,6 +10,8 @@
    y lo recoge SUBIR-A-LA-WEB.bat.
    ============================================================= */
 
+import { apiFetch } from "./servidor";
+
 const DB = "neo3d_web_bridge";
 const STORE = "handles";
 const KEY = "carpetaWeb";
@@ -192,15 +194,13 @@ export async function publicarEnWeb({ nombre, cat, esc, precio, desc, tags, foto
   return { id, foto: fotoGuardada };
 }
 
-const API = "https://neo3d-backend.onrender.com";
-
 /**
  * Deja la pieza guardada en el servidor para publicarla despues desde la PC.
  * Es el camino cuando cargas desde el celular: ahi el navegador no puede
  * escribir en la carpeta porque la carpeta no existe en el telefono.
  */
 export async function enviarAlServidor({ nombre, cat, esc, precio, desc, tags, fotoDataUrl, gramos, horas }) {
-  const r = await fetch(`${API}/web-pendientes`, {
+  const r = await apiFetch("/web-pendientes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
