@@ -514,7 +514,7 @@ function TabCalcular({ ventas, setVentas, catalogo, guardarEnCatalogo, eliminarD
       )}
 
       {modo === "personalizado"
-        ? <FormPersonalizado ventas={ventas} fetchVentas={fetchVentas} cfg={cfg} />
+        ? <FormPersonalizado ventas={ventas} catalogo={catalogo} fetchVentas={fetchVentas} cfg={cfg} />
         : <>
       <div style={S.card}>
 
@@ -750,8 +750,19 @@ function ClienteCampo({ value, onChange, ventas }) {
 
 // ─── PEDIDO PERSONALIZADO ─────────────────────────────────
 // Para lo que ya cotizaste a mano: una descripción y el total cobrado.
-// Gramos y horas son opcionales; si los ponés, esa parte va a la caja chica.
-function FormPersonalizado({ ventas, fetchVentas, cfg }) {
+// Se reparte como una pieza normal: con regla de tres sobre tu fórmula se estima
+// cuántos gramos y horas lleva ese precio (mano de obra $1 y tu % de ganancia).
+const MO_PERSONALIZADO = 1;
+
+// Gramos que imprimís por hora, en promedio, según las piezas de tu catálogo
+const gramosPorHora = (catalogo) => {
+  const conDatos = catalogo.filter(p => Number(p.gramos) > 0 && Number(p.horas) > 0);
+  const g = conDatos.reduce((s, p) => s + Number(p.gramos), 0);
+  const h = conDatos.reduce((s, p) => s + Number(p.horas), 0);
+  return h > 0 ? g / h : 30;
+};
+
+function FormPersonalizado({ ventas, catalogo, fetchVentas, cfg }) {
   const hoy = hoyLocal;
   const vacio = { descripcion: "", cliente: "", fecha: hoy(), fechaEntrega: "", total: "", abono: "",
     estado: "por_hacer", gramos: "", horas: "" };
@@ -763,11 +774,22 @@ function FormPersonalizado({ ventas, fetchVentas, cfg }) {
   const abono  = Math.min(Math.max(Number(f.abono) || 0, 0), total);
   const valido = f.descripcion.trim() && total > 0;
 
-  // Mismo reparto que el Resumen: material y máquina a la caja; de lo que sobra, la reserva también
-  const costo    = (Number(f.gramos) || 0) * cfg.precioPorGramo + (Number(f.horas) || 0) * cfg.precioPorHora;
-  const sobra    = total - costo;
-  const reserva  = Math.max(0, sobra) * (cfg.reservaNegocio || 0);
-  const sueldo   = sobra - reserva;
+  // Regla de tres: precio = costo × (1 + ganancia), y costo = material + máquina + mano de obra
+  const ritmo     = gramosPorHora(catalogo);
+  const baseEst   = total / (1 + cfg.porcentajeGanancia);
+  const mo        = Math.min(MO_PERSONALIZADO, baseEst);
+  const porHora   = ritmo * cfg.precioPorGramo + cfg.precioPorHora;   // material + máquina de 1 hora
+  const horasEst  = porHora > 0 ? Math.max(0, baseEst - mo) / porHora : 0;
+  // Si escribís los reales se usan esos; si no, el estimado
+  const horas  = f.horas  !== "" ? Number(f.horas)  || 0 : Math.round(horasEst * 10) / 10;
+  const gramos = f.gramos !== "" ? Number(f.gramos) || 0 : Math.round(horasEst * ritmo);
+
+  // Mismo reparto que el Resumen
+  const c        = calcPieza({ gramos, horas, manoDeObra: mo }, cfg);
+  const ganancia = total - c.base;
+  const reserva  = Math.max(0, ganancia) * (cfg.reservaNegocio || 0);
+  const caja     = c.fil + c.hrs + reserva;
+  const sueldo   = mo + ganancia - reserva;
 
   const guardar = () => {
     if (!valido) return;
@@ -777,9 +799,9 @@ function FormPersonalizado({ ventas, fetchVentas, cfg }) {
       body: JSON.stringify({
         nombre: f.descripcion.trim(),
         cliente: f.cliente.trim(),
-        gramos: Number(f.gramos) || 0,
-        horas: Number(f.horas) || 0,
-        manoDeObra: 0,
+        gramos,
+        horas,
+        manoDeObra: mo,
         cantidad: 1,
         precioUnit: total,
         precioTotal: total,
@@ -833,25 +855,32 @@ function FormPersonalizado({ ventas, fetchVentas, cfg }) {
       </Field>
 
       <div style={S.row2}>
-        <Field label="Gramos" hint="opcional">
-          <input style={S.input} type="number" name="gramos" value={f.gramos} onChange={ch} placeholder="total aprox." min="0" />
+        <Field label="Gramos" hint={f.gramos === "" ? "estimado" : "real"}>
+          <input style={S.input} type="number" name="gramos" value={f.gramos} onChange={ch}
+            placeholder={total > 0 ? `~${gramos}` : "auto"} min="0" />
         </Field>
-        <Field label="Horas" hint="opcional">
-          <input style={S.input} type="number" name="horas" value={f.horas} onChange={ch} placeholder="total aprox." min="0" step="0.5" />
+        <Field label="Horas" hint={f.horas === "" ? "estimado" : "real"}>
+          <input style={S.input} type="number" name="horas" value={f.horas} onChange={ch}
+            placeholder={total > 0 ? `~${horas}` : "auto"} min="0" step="0.5" />
         </Field>
       </div>
 
       {total > 0 && (
         <div style={S.preview}>
-          <div style={S.previewTitle}>Cómo se reparte</div>
-          {costo > 0 && <Row label="Material y máquina → caja chica" val={fmt(costo)} />}
-          <Row label={`Reserva ${Math.round((cfg.reservaNegocio || 0) * 100)}% → caja chica`} val={fmt(reserva)} />
-          <Row label="Tu sueldo" val={fmt(sueldo)} bold />
-          {costo === 0 && (
-            <div style={{ fontSize: 11, color: C.muted }}>
-              Sin gramos ni horas todo cuenta como ganancia. Si los ponés, la caja chica repone el material.
-            </div>
-          )}
+          <div style={S.previewTitle}>Como una pieza normal</div>
+          <Row label={`Filamento (${gramos}g)`} val={fmt(c.fil)} />
+          <Row label={`Horas (${horas}h)`} val={fmt(c.hrs)} />
+          <Row label="Mano de obra" val={fmt(mo)} />
+          <Row label="Costo" val={fmt(c.base)} bold />
+          <Row label={`Ganancia (${Math.round(ganancia / (c.base || 1) * 100)}% sobre el costo)`} val={`+${fmt(ganancia)}`} teal={ganancia >= 0} red={ganancia < 0} />
+          <div style={S.divider} />
+          <Row label="Caja chica (material, máquina y reserva)" val={fmt(caja)} />
+          <Row label="Tu sueldo (mano de obra y ganancia)" val={fmt(sueldo)} bold />
+          <div style={{ fontSize: 11, color: C.muted }}>
+            {f.gramos === "" && f.horas === ""
+              ? `Gramos y horas sacados con regla de tres: tu fórmula con mano de obra $${MO_PERSONALIZADO} y ${Math.round(cfg.porcentajeGanancia * 100)}% de ganancia, a ~${Math.round(ritmo)} g por hora como tus piezas del catálogo. Si sabés los reales, escribilos.`
+              : "Con los gramos y horas que escribiste."}
+          </div>
         </div>
       )}
 
