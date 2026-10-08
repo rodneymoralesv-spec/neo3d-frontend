@@ -58,6 +58,12 @@ const fmt = (n = 0) =>
 const mesLabel = (ym) =>
   new Date(ym + "-02").toLocaleDateString("es-EC", { month: "long", year: "numeric" });
 
+// Fecha de hoy en hora de Ecuador (toISOString da la de Londres: después de las 7 pm ya es mañana)
+const hoyLocal = () => {
+  const h = new Date();
+  return `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, "0")}-${String(h.getDate()).padStart(2, "0")}`;
+};
+
 const hoyYM = () => {
   const h = new Date();
   return `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, "0")}`;
@@ -349,7 +355,7 @@ function TabCalcular({ ventas, setVentas, catalogo, guardarEnCatalogo, eliminarD
   manoDeObra: "",
   cantidad: "1",
   precioManual: "",
-  fecha: new Date().toISOString().split("T")[0],
+  fecha: hoyLocal(),
   fechaEntrega: "",
   abono: "",
   estado: "por_hacer"
@@ -361,6 +367,8 @@ function TabCalcular({ ventas, setVentas, catalogo, guardarEnCatalogo, eliminarD
   const [esDelCatalogo, setEsDelCatalogo] = useState(false); // si el form vino de catálogo
   // Piezas ya agregadas al pedido del cliente; se registran todas juntas
   const [pedido, setPedido] = useState([]);
+  // "pieza" = se calcula con gramos y horas; "personalizado" = solo el precio que cobraste
+  const [modo, setModo] = useState("pieza");
   const inputRef = useRef(null);
 
   // Filtra sugerencias cuando cambia el nombre
@@ -420,14 +428,6 @@ function TabCalcular({ ventas, setVentas, catalogo, guardarEnCatalogo, eliminarD
   // El abono es del pedido completo: nunca pasa del total
   const abonoNum = Math.min(Math.max(Number(form.abono) || 0, 0), totalPedido);
 
-  // Cliente que ya compró antes: cuántos pedidos tiene y cuánto debe
-  const clientes = [...new Set(ventas.map(v => (v.cliente || "").trim()).filter(Boolean))];
-  const delCliente = form.cliente.trim()
-    ? ventas.filter(v => (v.cliente || "").trim().toLowerCase() === form.cliente.trim().toLowerCase())
-    : [];
-  const debeCliente = delCliente.filter(v => !v.pagado).reduce((s, v) => s + Math.max(0, v.precioTotal - v.abono), 0);
-  const diasCliente = new Set(delCliente.map(v => String(v.fecha).slice(0, 10))).size;
-
   const limpiarPieza = () => {
     setForm(p => ({ ...p, nombre: "", gramos: "", horas: "", manoDeObra: "", cantidad: "1", precioManual: "" }));
     setEsDelCatalogo(false);
@@ -479,7 +479,7 @@ function TabCalcular({ ventas, setVentas, catalogo, guardarEnCatalogo, eliminarD
 
   setForm({
   ...empty,
-  fecha: new Date().toISOString().split("T")[0]
+  fecha: hoyLocal()
 });
   setPedido([]);
   setEsDelCatalogo(false);
@@ -497,8 +497,25 @@ function TabCalcular({ ventas, setVentas, catalogo, guardarEnCatalogo, eliminarD
 
   return (
     <div style={S.section}>
-      <SectionHeader title="Nueva pieza" sub="Escribí el nombre y se autocompleta si ya existe" />
+      <SectionHeader
+        title={modo === "personalizado" ? "Pedido personalizado" : "Nueva pieza"}
+        sub={modo === "personalizado" ? "Ya lo cotizaste: solo poné qué es y cuánto cobraste"
+          : "Escribí el nombre y se autocompleta si ya existe"} />
 
+      {pedido.length === 0 && (
+        <div style={S.segRow}>
+          {[["pieza", "Pieza calculada"], ["personalizado", "Personalizado (solo precio)"]].map(([id, label]) => (
+            <button key={id} onClick={() => setModo(id)}
+              style={{ ...S.segBtn, ...(modo === id ? { background: "rgba(227,20,31,0.15)", color: C.text, borderColor: C.accent } : {}) }}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {modo === "personalizado"
+        ? <FormPersonalizado ventas={ventas} fetchVentas={fetchVentas} cfg={cfg} />
+        : <>
       <div style={S.card}>
 
         {/* Nombre con autocompletado */}
@@ -547,19 +564,7 @@ function TabCalcular({ ventas, setVentas, catalogo, guardarEnCatalogo, eliminarD
         )}
 
         {/* Cliente */}
-        <Field label="Cliente">
-          <input style={S.input} name="cliente" value={form.cliente} onChange={ch} placeholder="Nombre del cliente"
-            list="clientes-anteriores" autoComplete="off" />
-          <datalist id="clientes-anteriores">
-            {clientes.map(c => <option key={c} value={c} />)}
-          </datalist>
-        </Field>
-        {delCliente.length > 0 && (
-          <div style={S.autocompleteBadge}>
-            Cliente conocido: {diasCliente} {diasCliente === 1 ? "pedido" : "pedidos"} antes
-            {debeCliente > 0.004 && <span style={{ color: "#fbbf24" }}> · te debe {fmt(debeCliente)}</span>}
-          </div>
-        )}
+        <ClienteCampo value={form.cliente} onChange={ch} ventas={ventas} />
 
         <div style={S.row2}>
           <Field label="Fecha del pedido">
@@ -701,6 +706,8 @@ function TabCalcular({ ventas, setVentas, catalogo, guardarEnCatalogo, eliminarD
         </div>
       )}
 
+      </>}
+
       {/* Tarifas */}
       <div style={S.row3}>
         {[["⬡",`$${cfg.precioPorGramo}`,"por gramo"],["◷",`$${cfg.precioPorHora}`,"por hora"],["◈",`${Math.round(cfg.porcentajeGanancia * 100)}%`,"ganancia"]].map(([ic,v,l]) => (
@@ -711,6 +718,146 @@ function TabCalcular({ ventas, setVentas, catalogo, guardarEnCatalogo, eliminarD
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// Campo cliente: sugiere los clientes anteriores y avisa si ya compró y cuánto debe
+function ClienteCampo({ value, onChange, ventas }) {
+  const clientes = [...new Set(ventas.map(v => (v.cliente || "").trim()).filter(Boolean))];
+  const buscado = value.trim().toLowerCase();
+  const delCliente = buscado ? ventas.filter(v => (v.cliente || "").trim().toLowerCase() === buscado) : [];
+  const debe = delCliente.filter(v => !v.pagado).reduce((s, v) => s + Math.max(0, v.precioTotal - v.abono), 0);
+  const pedidos = new Set(delCliente.map(v => String(v.fecha).slice(0, 10))).size;
+  return (
+    <>
+      <Field label="Cliente">
+        <input style={S.input} name="cliente" value={value} onChange={onChange} placeholder="Nombre del cliente"
+          list="clientes-anteriores" autoComplete="off" />
+        <datalist id="clientes-anteriores">
+          {clientes.map(c => <option key={c} value={c} />)}
+        </datalist>
+      </Field>
+      {delCliente.length > 0 && (
+        <div style={S.autocompleteBadge}>
+          Cliente conocido: {pedidos} {pedidos === 1 ? "pedido" : "pedidos"} antes
+          {debe > 0.004 && <span style={{ color: "#fbbf24" }}> · te debe {fmt(debe)}</span>}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── PEDIDO PERSONALIZADO ─────────────────────────────────
+// Para lo que ya cotizaste a mano: una descripción y el total cobrado.
+// Gramos y horas son opcionales; si los ponés, esa parte va a la caja chica.
+function FormPersonalizado({ ventas, fetchVentas, cfg }) {
+  const hoy = hoyLocal;
+  const vacio = { descripcion: "", cliente: "", fecha: hoy(), fechaEntrega: "", total: "", abono: "",
+    estado: "por_hacer", gramos: "", horas: "" };
+  const [f, setF]   = useState(vacio);
+  const [ok, setOk] = useState(false);
+  const ch = e => setF(p => ({ ...p, [e.target.name]: e.target.value }));
+
+  const total  = Math.max(0, Number(f.total) || 0);
+  const abono  = Math.min(Math.max(Number(f.abono) || 0, 0), total);
+  const valido = f.descripcion.trim() && total > 0;
+
+  // Mismo reparto que el Resumen: material y máquina a la caja; de lo que sobra, la reserva también
+  const costo    = (Number(f.gramos) || 0) * cfg.precioPorGramo + (Number(f.horas) || 0) * cfg.precioPorHora;
+  const sobra    = total - costo;
+  const reserva  = Math.max(0, sobra) * (cfg.reservaNegocio || 0);
+  const sueldo   = sobra - reserva;
+
+  const guardar = () => {
+    if (!valido) return;
+    apiFetch("/ventas", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" },
+      body: JSON.stringify({
+        nombre: f.descripcion.trim(),
+        cliente: f.cliente.trim(),
+        gramos: Number(f.gramos) || 0,
+        horas: Number(f.horas) || 0,
+        manoDeObra: 0,
+        cantidad: 1,
+        precioUnit: total,
+        precioTotal: total,
+        ajustado: true,
+        pagado: abono >= total - 0.005,
+        abono,
+        estado: f.estado,
+        fechaEntrega: deInputFecha(f.fechaEntrega),
+        fecha: new Date(f.fecha + "T12:00:00").toISOString(),
+      }),
+    })
+      .then(() => fetchVentas())
+      .catch(err => console.log("ERROR:", err));
+    setF({ ...vacio, fecha: hoy() });
+    setOk(true);
+    setTimeout(() => setOk(false), 2200);
+  };
+
+  return (
+    <div style={S.card}>
+      <Field label="¿Qué es el pedido?">
+        <input style={S.input} name="descripcion" value={f.descripcion} onChange={ch}
+          placeholder="Ej: 3 llaveros con logo + letrero" autoComplete="off" />
+      </Field>
+
+      <ClienteCampo value={f.cliente} onChange={ch} ventas={ventas} />
+
+      <div style={S.row2}>
+        <Field label="Fecha del pedido">
+          <input type="date" name="fecha" value={f.fecha} onChange={ch} style={{ ...S.input, ...S.inputFecha }} />
+        </Field>
+        <Field label="Entregar el" hint="opcional">
+          <input type="date" name="fechaEntrega" value={f.fechaEntrega} onChange={ch} style={{ ...S.input, ...S.inputFecha }} />
+        </Field>
+      </div>
+
+      <div style={S.row2}>
+        <Field label="Total cobrado" hint="USD">
+          <input style={{ ...S.input, ...S.inputDestacado }} type="number" name="total" value={f.total} onChange={ch}
+            placeholder="0.00" min="0" step="0.50" />
+        </Field>
+        <Field label="Abono recibido" hint={abono > 0 && total > 0 ? `${Math.round(abono / total * 100)}%` : "USD"}>
+          <input style={S.input} type="number" name="abono" value={f.abono} onChange={ch} placeholder="0.00" min="0" step="0.50" />
+        </Field>
+      </div>
+
+      <Field label="Estado">
+        <select style={{ ...S.input, ...S.inputFecha }} name="estado" value={f.estado} onChange={ch}>
+          {ESTADOS.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+        </select>
+      </Field>
+
+      <div style={S.row2}>
+        <Field label="Gramos" hint="opcional">
+          <input style={S.input} type="number" name="gramos" value={f.gramos} onChange={ch} placeholder="total aprox." min="0" />
+        </Field>
+        <Field label="Horas" hint="opcional">
+          <input style={S.input} type="number" name="horas" value={f.horas} onChange={ch} placeholder="total aprox." min="0" step="0.5" />
+        </Field>
+      </div>
+
+      {total > 0 && (
+        <div style={S.preview}>
+          <div style={S.previewTitle}>Cómo se reparte</div>
+          {costo > 0 && <Row label="Material y máquina → caja chica" val={fmt(costo)} />}
+          <Row label={`Reserva ${Math.round((cfg.reservaNegocio || 0) * 100)}% → caja chica`} val={fmt(reserva)} />
+          <Row label="Tu sueldo" val={fmt(sueldo)} bold />
+          {costo === 0 && (
+            <div style={{ fontSize: 11, color: C.muted }}>
+              Sin gramos ni horas todo cuenta como ganancia. Si los ponés, la caja chica repone el material.
+            </div>
+          )}
+        </div>
+      )}
+
+      <button style={{ ...S.btn, ...(!valido ? S.btnOff : {}) }} onClick={guardar} disabled={!valido}>
+        {ok ? "✓ ¡Registrado!" : total > 0 ? `Registrar pedido personalizado · ${fmt(total)}` : "Registrar pedido personalizado"}
+      </button>
     </div>
   );
 }
@@ -1149,7 +1296,7 @@ function VentaCard({ v, marcarPago, eliminarVenta, actualizarVenta, cfg }) {
 
 // ─── TAB GASTOS ───────────────────────────────────────────
 function TabGastos({ gastos, setGastos, eliminarGasto }) {
-  const emptyG = { descripcion: "", categoria: "filamento", monto: "", fecha: new Date().toISOString().slice(0, 10) };
+  const emptyG = { descripcion: "", categoria: "filamento", monto: "", fecha: hoyLocal() };
   const [form, setForm] = useState(emptyG);
   const [ok,   setOk]   = useState(false);
 
