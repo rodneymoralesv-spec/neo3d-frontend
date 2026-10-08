@@ -52,6 +52,16 @@ const deInputFecha = (s) => (s ? new Date(s + "T12:00:00").toISOString() : null)
 // Que parte del precio ya se cobro (0 a 1): pagado = todo; si no, lo abonado
 const fraccionCobrada = (v) => (v.pagado ? 1 : Math.min(1, (v.abono || 0) / (v.precioTotal || 1)));
 
+// Fechas en formato dd/mm/aa. Los gastos se guardan a medianoche UTC: esos se leen
+// tal cual, porque pasados a hora de Ecuador quedarían en el día anterior.
+const fechaCorta = (f) => {
+  if (!f) return "";
+  const m = String(f).match(/^(\d{4})-(\d{2})-(\d{2})(T00:00:00(\.000)?Z)?$/);
+  if (m) return `${m[3]}/${m[2]}/${m[1].slice(2)}`;
+  const d = new Date(f);
+  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getFullYear()).slice(2)}`;
+};
+
 const fmt = (n = 0) =>
   Number(n).toLocaleString("es-EC", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
 
@@ -1161,7 +1171,7 @@ function agruparPedidos(lista) {
 function PedidoGrupo({ piezas, marcarPago, eliminarVenta, actualizarVenta, cfg }) {
   const total = piezas.reduce((s, v) => s + v.precioTotal, 0);
   const debe  = piezas.filter(v => !v.pagado).reduce((s, v) => s + Math.max(0, v.precioTotal - v.abono), 0);
-  const fecha = new Date(piezas[0].fecha).toLocaleDateString("es-EC", { day: "2-digit", month: "short" });
+  const fecha = fechaCorta(piezas[0].fecha);
   // Si todas van en el mismo estado, se pueden avanzar juntas
   const mismoEstado = piezas.every(v => v.estado === piezas[0].estado);
   const siguiente   = mismoEstado ? SIGUIENTE[piezas[0].estado] : null;
@@ -1204,7 +1214,7 @@ function VentaCard({ v, marcarPago, eliminarVenta, actualizarVenta, cfg }) {
   const [open, setOpen] = useState(false);
   const abonoRef = useRef(null);
   const calc = calcPieza(v, cfg);
-  const fecha = new Date(v.fecha).toLocaleDateString("es-EC", { day: "2-digit", month: "short", year: "numeric" });
+  const fecha = fechaCorta(v.fecha);
 
   const est       = estadoInfo(v.estado);
   const siguiente = SIGUIENTE[v.estado];
@@ -1218,7 +1228,7 @@ function VentaCard({ v, marcarPago, eliminarVenta, actualizarVenta, cfg }) {
     : dias < 0   ? { txt: `Atrasada ${-dias} d`, color: "#f87171" }
     : dias === 0 ? { txt: "Entrega HOY",         color: "#fbbf24" }
     : dias === 1 ? { txt: "Entrega mañana",      color: "#fbbf24" }
-    : { txt: `Entrega ${new Date(v.fechaEntrega).toLocaleDateString("es-EC", { day: "2-digit", month: "short" })}`, color: C.muted };
+    : { txt: `Entrega ${fechaCorta(v.fechaEntrega)}`, color: C.muted };
 
   const pagoColor = v.pagado ? C.teal : conAbono ? "#fbbf24" : "#f87171";
   const pagoTxt   = v.pagado ? "✓ Pagado" : conAbono ? `Abono ${Math.round(abonado / v.precioTotal * 100)}%` : "Pendiente";
@@ -1405,7 +1415,7 @@ function TabGastos({ gastos, setGastos, eliminarGasto }) {
               <span style={{ fontSize: 18, width: 24, textAlign: "center" }}>{cats[g.categoria]?.slice(0, 2) || "•"}</span>
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 600, fontSize: 14 }}>{g.descripcion}</div>
-                <div style={{ fontSize: 11, color: C.muted }}>{cats[g.categoria]?.slice(2).trim()} · {new Date(g.fecha).toLocaleDateString("es-EC", { day: "2-digit", month: "short", year: "numeric" })}</div>
+                <div style={{ fontSize: 11, color: C.muted }}>{cats[g.categoria]?.slice(2).trim()} · {fechaCorta(g.fecha)}</div>
               </div>
               <span style={{ fontWeight: 800, color: "#f87171", marginRight: 10 }}>{fmt(g.monto)}</span>
               <button style={S.btnX} onClick={() => eliminarGasto(g.id)}>✕</button>
