@@ -1212,6 +1212,7 @@ function PedidoGrupo({ piezas, marcarPago, eliminarVenta, actualizarVenta, cfg }
 
 function VentaCard({ v, marcarPago, eliminarVenta, actualizarVenta, cfg }) {
   const [open, setOpen] = useState(false);
+  const [editando, setEditando] = useState(false);
   const abonoRef = useRef(null);
   const calc = calcPieza(v, cfg);
   const fecha = fechaCorta(v.fecha);
@@ -1261,7 +1262,13 @@ function VentaCard({ v, marcarPago, eliminarVenta, actualizarVenta, cfg }) {
         </div>
       </div>
 
-      {open && (
+      {open && editando && (
+        <EditarVenta v={v} cfg={cfg}
+          onCancelar={() => setEditando(false)}
+          onGuardar={campos => { actualizarVenta(v.id, campos); setEditando(false); }} />
+      )}
+
+      {open && !editando && (
         <div style={S.vDetail}>
           <Row label={`Filamento (${v.gramos}g)`} val={fmt(calc.fil)} />
           <Row label={`Horas (${v.horas}h)`}       val={fmt(calc.hrs)} />
@@ -1316,6 +1323,10 @@ function VentaCard({ v, marcarPago, eliminarVenta, actualizarVenta, cfg }) {
           )}
 
           <div style={S.vActions}>
+            <button style={{ ...S.actionBtn, background: "rgba(255,255,255,0.06)", color: C.text }}
+              onClick={() => setEditando(true)}>
+              ✏️ Editar
+            </button>
             <button style={{ ...S.actionBtn, flex: 2,
               background: v.pagado ? "rgba(248,113,113,0.15)" : "rgba(0,196,180,0.15)",
               color: v.pagado ? "#f87171" : C.teal }}
@@ -1329,6 +1340,95 @@ function VentaCard({ v, marcarPago, eliminarVenta, actualizarVenta, cfg }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Formulario para corregir una pieza ya registrada: nombre, cliente, fecha,
+// gramos, horas, mano de obra, unidades, precio y lo abonado.
+function EditarVenta({ v, cfg, onGuardar, onCancelar }) {
+  const [f, setF] = useState(() => ({
+    nombre: v.nombre || "",
+    cliente: v.cliente || "",
+    fecha: aInputFecha(v.fecha),
+    gramos: String(v.gramos ?? ""),
+    horas: String(v.horas ?? ""),
+    manoDeObra: String(v.manoDeObra ?? ""),
+    cantidad: String(v.cantidad || 1),
+    precioUnit: String(Math.round((v.precioTotal / (v.cantidad || 1)) * 100) / 100),
+    abono: String(v.pagado ? v.precioTotal : v.abono || 0),
+  }));
+  const ch = e => setF(p => ({ ...p, [e.target.name]: e.target.value }));
+
+  const cant     = Math.max(1, Math.round(Number(f.cantidad) || 1));
+  const unit     = Math.max(0, Number(f.precioUnit) || 0);
+  const total    = Math.round(unit * cant * 100) / 100;
+  const abono    = Math.min(Math.max(Number(f.abono) || 0, 0), total);
+  const sugerido = calcPieza(f, cfg).sugerido;
+  const valido   = f.nombre.trim() && f.fecha && total > 0;
+
+  const guardar = () => {
+    if (!valido) return;
+    onGuardar({
+      nombre: f.nombre.trim(),
+      cliente: f.cliente.trim(),
+      fecha: deInputFecha(f.fecha),
+      gramos: Number(f.gramos) || 0,
+      horas: Number(f.horas) || 0,
+      manoDeObra: Number(f.manoDeObra) || 0,
+      cantidad: cant,
+      precioTotal: total,
+      ajustado: Math.abs(unit - sugerido) > 0.005,
+      abono,
+    });
+  };
+
+  return (
+    <div style={S.vDetail}>
+      <div style={S.vLabel}>Editar pieza</div>
+      <Field label="Nombre">
+        <input style={S.input} name="nombre" value={f.nombre} onChange={ch} />
+      </Field>
+      <div style={S.row2}>
+        <Field label="Cliente">
+          <input style={S.input} name="cliente" value={f.cliente} onChange={ch} />
+        </Field>
+        <Field label="Fecha del pedido">
+          <input type="date" name="fecha" value={f.fecha} onChange={ch} style={{ ...S.input, ...S.inputFecha }} />
+        </Field>
+      </div>
+      <div style={S.row3}>
+        <Field label="Gramos">
+          <input style={S.input} type="number" name="gramos" value={f.gramos} onChange={ch} min="0" />
+        </Field>
+        <Field label="Horas">
+          <input style={S.input} type="number" name="horas" value={f.horas} onChange={ch} min="0" step="0.5" />
+        </Field>
+        <Field label="Mano obra">
+          <input style={S.input} type="number" name="manoDeObra" value={f.manoDeObra} onChange={ch} min="0" step="0.01" />
+        </Field>
+      </div>
+      <div style={S.row2}>
+        <Field label="Unidades">
+          <input style={S.input} type="number" name="cantidad" value={f.cantidad} onChange={ch} min="1" step="1" />
+        </Field>
+        <Field label="Precio x unidad" hint={`sug. ${fmt(sugerido)}`}>
+          <input style={S.input} type="number" name="precioUnit" value={f.precioUnit} onChange={ch} min="0" step="0.50" />
+        </Field>
+      </div>
+      <Field label="Abonado hasta ahora" hint={abono >= total - 0.005 ? "pagado completo" : `debe ${fmt(total - abono)}`}>
+        <input style={S.input} type="number" name="abono" value={f.abono} onChange={ch} min="0" step="0.50" />
+      </Field>
+      <Row label="Total" val={fmt(total)} bold />
+      <div style={S.vActions}>
+        <button style={{ ...S.actionBtn, background: "rgba(255,255,255,0.06)", color: C.text }} onClick={onCancelar}>
+          Cancelar
+        </button>
+        <button style={{ ...S.actionBtn, flex: 2, background: "rgba(0,196,180,0.15)", color: C.teal, ...(!valido ? S.btnOff : {}) }}
+          onClick={guardar} disabled={!valido}>
+          ✓ Guardar cambios
+        </button>
+      </div>
     </div>
   );
 }
