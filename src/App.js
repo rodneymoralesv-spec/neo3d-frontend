@@ -377,6 +377,7 @@ function TabCalcular({ ventas, setVentas, catalogo, guardarEnCatalogo, eliminarD
   const [esDelCatalogo, setEsDelCatalogo] = useState(false); // si el form vino de catálogo
   // Piezas ya agregadas al pedido del cliente; se registran todas juntas
   const [pedido, setPedido] = useState([]);
+  const [okCatalogo, setOkCatalogo] = useState(false);
   // "pieza" = se calcula con gramos y horas; "personalizado" = solo el precio que cobraste
   const [modo, setModo] = useState("pieza");
   const inputRef = useRef(null);
@@ -682,6 +683,31 @@ function TabCalcular({ ventas, setVentas, catalogo, guardarEnCatalogo, eliminarD
           + Agregar otra pieza a este pedido
         </button>
 
+        {/* Guardar la pieza en el catálogo sin registrar ninguna venta */}
+        {(() => {
+          const puede = valid && form.nombre.trim() && (!piezaCatalogo || hayDiferencia);
+          return (
+            <button style={{ ...S.btn, background: "none", border: `1px solid ${C.teal}`, color: C.teal, ...(!puede && !okCatalogo ? S.btnOff : {}) }}
+              disabled={!puede}
+              onClick={() => {
+                guardarEnCatalogo({
+                  nombre: form.nombre.trim(),
+                  gramos: Number(form.gramos),
+                  horas: Number(form.horas),
+                  manoDeObra: Number(form.manoDeObra),
+                });
+                limpiarPieza();
+                setOkCatalogo(true);
+                setTimeout(() => setOkCatalogo(false), 2200);
+              }}>
+              {okCatalogo ? "✓ Guardado en el catálogo"
+                : piezaCatalogo && hayDiferencia ? "Actualizar en el catálogo (sin vender)"
+                : piezaCatalogo ? "Ya está en el catálogo"
+                : "Guardar en el catálogo (sin vender)"}
+            </button>
+          );
+        })()}
+
         <button style={{ ...S.btn, ...(nPiezas === 0 ? S.btnOff : {}) }} onClick={guardar} disabled={nPiezas === 0}>
           {ok ? "✓ ¡Registrado!"
             : nPiezas > 1 ? `Registrar pedido (${nPiezas} piezas · ${fmt(totalPedido)})`
@@ -907,9 +933,9 @@ function FormPersonalizado({ ventas, catalogo, fetchVentas, cfg }) {
 const CATS_WEB = [
   ["personalizados", "Personalizados"],
   ["gamer",          "Gamer y figuras"],
+  ["jarros",         "Jarros de equipos"],
   ["llaveros",       "Llaveros"],
   ["hogar",          "Hogar y deco"],
-  ["piezas",         "Piezas y repuestos"],
   ["empresas",       "Para empresas"],
 ];
 
