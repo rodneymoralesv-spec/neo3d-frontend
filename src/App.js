@@ -1605,55 +1605,76 @@ function calcResumen(ventasArr, gastosArr, cfg) {
 }
 
 function TabResumen({ ventas, gastos, cfg }) {
-  const mesesDisponibles = [...new Set([
+  // Desde octubre: un mes a la vez, y la caja chica se va sumando mes a mes.
+  // Antes de octubre (etapa con tu prima): solo el resultado general, cobrado − gastos.
+  const mesActual = hoyYM();
+  const meses = [...new Set([
     ...ventas.map(v => v.fecha.slice(0, 7)),
     ...gastos.map(g => g.fecha.slice(0, 7)),
-  ])].sort().reverse();
+    ...(mesActual >= INICIO_SOLO ? [mesActual] : []),
+  ])].filter(m => m >= INICIO_SOLO).sort().reverse();
+  const hayAntes = ventas.some(v => !esEtapaActual(v.fecha)) || gastos.some(g => !esEtapaActual(g.fecha));
 
-  const mesesActuales = mesesDisponibles.filter(m => m >= INICIO_SOLO);
-  const mesesAntes    = mesesDisponibles.filter(m => m < INICIO_SOLO);
+  const [filtro, setFiltro] = useState(() => meses[0] || "antes");
 
-  // "actual" = desde que el negocio es solo tuyo; "antes" = etapa en sociedad; "global" = todo
-  const [filtro, setFiltro] = useState(() => mesesActuales.includes(hoyYM()) ? hoyYM() : "actual");
+  if (filtro === "antes") {
+    const ventasAntes = ventas.filter(v => !esEtapaActual(v.fecha));
+    const gastosAntes = gastos.filter(g => !esEtapaActual(g.fecha));
+    const r = calcResumen(ventasAntes, gastosAntes, cfg);
+    return (
+      <div style={S.section}>
+        <SectionHeader title="Resumen" sub="Finanzas del negocio" />
+        <SelectorPeriodo filtro={filtro} setFiltro={setFiltro} meses={meses} hayAntes={hayAntes} />
+        <div style={{ ...S.sueldoCard, gap: 6, borderColor: "rgba(0,196,180,0.35)", background: "rgba(0,196,180,0.06)" }}>
+          <div style={{ fontSize: 13, color: C.muted }}>Resultado hasta {mesLabel(ultimoMesAntes())}</div>
+          <div style={{ fontSize: 30, fontWeight: 900, color: r.cuenta >= 0 ? C.teal : "#f87171" }}>{fmt(r.cuenta)}</div>
+          <div style={{ fontSize: 12, color: C.muted }}>
+            Lo que se cobró {fmt(r.totalCobrado)} − lo que se gastó {fmt(r.totalGastos)}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-  const enPeriodo = (fecha) =>
-    filtro === "global" ? true
-    : filtro === "actual" ? esEtapaActual(fecha)
-    : filtro === "antes"  ? !esEtapaActual(fecha)
-    : fecha.startsWith(filtro);
-  const ventasFiltradas = ventas.filter(v => enPeriodo(v.fecha));
-  const gastosFiltrados = gastos.filter(g => enPeriodo(g.fecha));
-  const r = calcResumen(ventasFiltradas, gastosFiltrados, cfg);
-  const periodoLabel = {
-    global: "todo el historial",
-    actual: `desde ${mesLabel(INICIO_SOLO)}`,
-    antes:  "la etapa en sociedad",
-  }[filtro] || mesLabel(filtro);
-  const sinDatos = ventasFiltradas.length === 0 && gastosFiltrados.length === 0;
+  const delMes = (fecha) => fecha.startsWith(filtro);
+  const hastaElMes = (fecha) => esEtapaActual(fecha) && fecha.slice(0, 7) <= filtro;
+  const ventasMes = ventas.filter(v => delMes(v.fecha));
+  const gastosMes = gastos.filter(g => delMes(g.fecha));
+  const r = calcResumen(ventasMes, gastosMes, cfg);
+  // La caja chica de cada mes se suma a la de los meses anteriores (desde octubre)
+  const acumulada = calcResumen(ventas.filter(v => hastaElMes(v.fecha)), gastos.filter(g => hastaElMes(g.fecha)), cfg).cajaChica;
+  const anterior  = acumulada - r.cajaChica;
+  const sinDatos  = ventasMes.length === 0 && gastosMes.length === 0;
+
+  const tarjetaCaja = (
+    <div style={{ ...S.card, gap: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+        <span style={{ fontSize: 26, color: C.accent }}>⬡</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>Caja chica acumulada</div>
+          <div style={{ fontSize: 11, color: C.muted }}>Desde {mesLabel(INICIO_SOLO)} hasta {mesLabel(filtro)}</div>
+        </div>
+        <div style={{ fontSize: 22, fontWeight: 900, color: acumulada >= 0 ? C.teal : "#f87171" }}>{fmt(acumulada)}</div>
+      </div>
+      {filtro > INICIO_SOLO && (
+        <>
+          <Row label="Venía de los meses anteriores" val={fmt(anterior)} />
+          <Row label={`Este mes (${mesLabel(filtro)})`} val={`${r.cajaChica >= 0 ? "+" : ""}${fmt(r.cajaChica)}`} />
+        </>
+      )}
+    </div>
+  );
 
   return (
     <div style={S.section}>
       <SectionHeader title="Resumen" sub="Finanzas del negocio" />
-
-      {/* Selector de período */}
-      <div style={S.card}>
-        <Field label="Período">
-          <select style={S.input} value={filtro} onChange={e => setFiltro(e.target.value)}>
-            <option value="actual">📊 Desde {mesLabel(INICIO_SOLO)} (todo tuyo)</option>
-            {mesesActuales.map(m => <option key={m} value={m}>{mesLabel(m)}</option>)}
-            {mesesAntes.length > 0 && (
-              <optgroup label="Historial (etapa en sociedad)">
-                <option value="antes">Todo antes de {mesLabel(INICIO_SOLO)}</option>
-                {mesesAntes.map(m => <option key={m} value={m}>{mesLabel(m)}</option>)}
-                <option value="global">Todo el historial junto</option>
-              </optgroup>
-            )}
-          </select>
-        </Field>
-      </div>
+      <SelectorPeriodo filtro={filtro} setFiltro={setFiltro} meses={meses} hayAntes={hayAntes} />
 
       {sinDatos
-        ? <Empty icon="◉" text={`Sin registros en ${periodoLabel}`} />
+        ? <>
+            <Empty icon="◉" text={`Sin registros en ${mesLabel(filtro)}`} />
+            {tarjetaCaja}
+          </>
         : <>
             {/* Tarjetas principales */}
             <div style={S.row2}>
@@ -1665,13 +1686,9 @@ function TabResumen({ ventas, gastos, cfg }) {
               <StatCard label="Gastado" val={fmt(r.totalGastos)} sub="insumos y gastos" color="#f87171" />
             </div>
             <div style={S.row2}>
-  <StatCard
-    label="Cuenta"
-    val={fmt(r.cuenta)}
-    sub="Cobrado - Gastos"
-    color="#22c55e"
-  />
-</div>
+              <StatCard label="Cuenta" val={fmt(r.cuenta)} sub="Cobrado - Gastos" color="#22c55e" />
+            </div>
+
             {/* Sueldo */}
             <div style={{ ...S.sueldoCard, flexDirection: "row", alignItems: "center", gap: 12,
               borderColor: "rgba(227,20,31,0.4)", background: "rgba(227,20,31,0.07)" }}>
@@ -1685,21 +1702,11 @@ function TabResumen({ ventas, gastos, cfg }) {
               <div style={{ fontSize: 24, fontWeight: 900 }}>{fmt(r.sueldo)}</div>
             </div>
 
-            {/* Caja chica */}
-            <div style={{ ...S.card, flexDirection: "row", alignItems: "center", gap: 16 }}>
-              <span style={{ fontSize: 26, color: C.accent }}>⬡</span>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 700, fontSize: 15 }}>Caja chica</div>
-                <div style={{ fontSize: 11, color: C.muted }}>
-                  Material, máquina{r.reserva > 0 ? " y reserva" : ""}{r.totalGastos > 0 ? ` − gastos ${fmt(r.totalGastos)}` : ""}
-                </div>
-              </div>
-              <div style={{ fontSize: 22, fontWeight: 900, color: r.cajaChica >= 0 ? C.teal : "#f87171" }}>{fmt(r.cajaChica)}</div>
-            </div>
+            {tarjetaCaja}
 
             {/* Desglose completo */}
             <div style={S.card}>
-              <div style={S.previewTitle}>Desglose completo</div>
+              <div style={S.previewTitle}>Desglose de {mesLabel(filtro)}</div>
               <Row label="Total facturado"   val={fmt(r.totalFact)} />
               <Row label="  Cobrado"         val={fmt(r.totalCobrado)} teal />
               <Row label="  Por cobrar"      val={fmt(r.totalPendiente)} />
@@ -1711,12 +1718,31 @@ function TabResumen({ ventas, gastos, cfg }) {
               <div style={S.divider} />
               <Row label="Material y máquina" val={fmt(r.costoCobrado)} />
               {r.reserva > 0 && <Row label={`Reserva (${Math.round(cfg.reservaNegocio * 100)}% de la ganancia)`} val={`+${fmt(r.reserva)}`} />}
-              <Row label="Caja chica bruta"  val={fmt(r.cajaChica + r.totalGastos)} />
               {r.totalGastos > 0 && <Row label="  − Gastos insumos" val={`−${fmt(r.totalGastos)}`} red />}
-              <Row label="Caja chica neta"   val={fmt(r.cajaChica)} bold />
+              <Row label="Caja chica del mes" val={fmt(r.cajaChica)} bold />
+              {filtro > INICIO_SOLO && <Row label="Caja chica acumulada" val={fmt(acumulada)} bold />}
             </div>
           </>
       }
+    </div>
+  );
+}
+
+// Último mes de la etapa con tu prima (el anterior a INICIO_SOLO)
+function ultimoMesAntes() {
+  const [a, m] = INICIO_SOLO.split("-").map(Number);
+  return m === 1 ? `${a - 1}-12` : `${a}-${String(m - 1).padStart(2, "0")}`;
+}
+
+function SelectorPeriodo({ filtro, setFiltro, meses, hayAntes }) {
+  return (
+    <div style={S.card}>
+      <Field label="Período">
+        <select style={S.input} value={filtro} onChange={e => setFiltro(e.target.value)}>
+          {meses.map(m => <option key={m} value={m}>{mesLabel(m)}</option>)}
+          {hayAntes && <option value="antes">Antes de {mesLabel(INICIO_SOLO)} (con tu prima)</option>}
+        </select>
+      </Field>
     </div>
   );
 }
