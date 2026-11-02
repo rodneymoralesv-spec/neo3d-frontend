@@ -1606,7 +1606,7 @@ function calcResumen(ventasArr, gastosArr, cfg) {
 
 function TabResumen({ ventas, gastos, cfg }) {
   // Desde octubre: un mes a la vez, y la caja chica se va sumando mes a mes.
-  // Antes de octubre (etapa con tu prima): solo el resultado general, cobrado − gastos.
+  // Antes de octubre: solo para ver lo que se ganó, cobrado − gastos.
   const mesActual = hoyYM();
   const meses = [...new Set([
     ...ventas.map(v => v.fecha.slice(0, 7)),
@@ -1621,15 +1621,35 @@ function TabResumen({ ventas, gastos, cfg }) {
     const ventasAntes = ventas.filter(v => !esEtapaActual(v.fecha));
     const gastosAntes = gastos.filter(g => !esEtapaActual(g.fecha));
     const r = calcResumen(ventasAntes, gastosAntes, cfg);
+    // Mes por mes, solo para ver: nada de esto entra en la caja chica de octubre en adelante
+    const mesesAntes = [...new Set([...ventasAntes, ...gastosAntes].map(x => x.fecha.slice(0, 7)))].sort().reverse();
     return (
       <div style={S.section}>
         <SectionHeader title="Resumen" sub="Finanzas del negocio" />
         <SelectorPeriodo filtro={filtro} setFiltro={setFiltro} meses={meses} hayAntes={hayAntes} />
         <div style={{ ...S.sueldoCard, gap: 6, borderColor: "rgba(0,196,180,0.35)", background: "rgba(0,196,180,0.06)" }}>
-          <div style={{ fontSize: 13, color: C.muted }}>Resultado hasta {mesLabel(ultimoMesAntes())}</div>
+          <div style={{ fontSize: 13, color: C.muted }}>Lo que se ganó hasta {mesLabel(ultimoMesAntes())}</div>
           <div style={{ fontSize: 30, fontWeight: 900, color: r.cuenta >= 0 ? C.teal : "#f87171" }}>{fmt(r.cuenta)}</div>
           <div style={{ fontSize: 12, color: C.muted }}>
             Lo que se cobró {fmt(r.totalCobrado)} − lo que se gastó {fmt(r.totalGastos)}
+          </div>
+        </div>
+        <div style={S.row2}>
+          <StatCard label="Cobrado" val={fmt(r.totalCobrado)} sub={`${r.numVentas} pieza${r.numVentas !== 1 ? "s" : ""}`} color={C.teal} />
+          <StatCard label="Gastado" val={fmt(r.totalGastos)} sub="insumos y gastos" color="#f87171" />
+        </div>
+        <div style={S.card}>
+          <div style={S.previewTitle}>Mes por mes</div>
+          {mesesAntes.map(m => {
+            const rm = calcResumen(ventasAntes.filter(v => v.fecha.startsWith(m)), gastosAntes.filter(g => g.fecha.startsWith(m)), cfg);
+            return (
+              <Row key={m} label={`${mesLabel(m)}  (${fmt(rm.totalCobrado)} − ${fmt(rm.totalGastos)})`}
+                val={fmt(rm.cuenta)} red={rm.cuenta < 0} />
+            );
+          })}
+          <div style={S.divider} />
+          <div style={{ fontSize: 11, color: C.muted }}>
+            Solo para ver: estos números no se suman a la caja chica ni a nada desde {mesLabel(INICIO_SOLO)}.
           </div>
         </div>
       </div>
@@ -1740,7 +1760,7 @@ function SelectorPeriodo({ filtro, setFiltro, meses, hayAntes }) {
       <Field label="Período">
         <select style={S.input} value={filtro} onChange={e => setFiltro(e.target.value)}>
           {meses.map(m => <option key={m} value={m}>{mesLabel(m)}</option>)}
-          {hayAntes && <option value="antes">Antes de {mesLabel(INICIO_SOLO)} (con tu prima)</option>}
+          {hayAntes && <option value="antes">Antes de {mesLabel(INICIO_SOLO)}</option>}
         </select>
       </Field>
     </div>
