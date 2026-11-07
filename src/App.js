@@ -1706,7 +1706,9 @@ function TabResumen({ ventas, gastos, cfg }) {
               <StatCard label="Gastado" val={fmt(r.totalGastos)} sub="insumos y gastos" color="#f87171" />
             </div>
             <div style={S.row2}>
-              <StatCard label="Cuenta" val={fmt(r.cuenta)} sub="Cobrado - Gastos" color="#22c55e" />
+              {/* Lo que debería haber en el banco: la caja chica se queda ahí mes a mes,
+                  los sueldos de meses anteriores ya se pasaron a otra cuenta */}
+              <StatCard label="Cuenta" val={fmt(acumulada + r.sueldo)} sub="Caja chica acumulada + sueldo del mes" color="#22c55e" />
             </div>
 
             {/* Sueldo */}
